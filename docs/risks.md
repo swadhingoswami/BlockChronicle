@@ -174,3 +174,48 @@ implementations (`NoSnapshot`, `DmSnapshotShell`), not a framework.
 | A6 | Generation count per epoch stays under 2^63 and backup IDs under 2^63 | monotonic counters are unbounded but practically fine; still check on load |
 | A7 | Sealing a few times per backup cycle is acceptable | if consumers need per-second boundaries, seal cost becomes the dominant term |
 | A8 | `dm-era` metadata snapshot + offline dump is usable | if not, custom target (R3/D1) |
+
+---
+
+## 4. Findings from implementation
+
+These are defects in the *specification* that were found while implementing it. They are
+recorded here because the design documents were wrong, and a future reader deserves to
+know which paragraphs to distrust.
+
+### F1 — Cumulative bitmaps cannot answer "changed since C" (S1, fixed in Phase 3)
+
+**What the design said.** `Required(c) = Cum_B AND NOT Cum_C`, where `Cum_k` is the OR of
+all deltas up to `k`. It appeared in `architecture.md`, `consistency-model.md`,
+`bitmap-history.md` and the Phase 3 acceptance criteria.
+
+**Why it is wrong.** Let `Cum_k = OR(D_1..D_k)`. Then
+
+```
+Cum_b AND NOT Cum_a = { r : r changed in (a, b] AND r never changed in [1, a] }
+```
+
+That is "first changed in the interval", not "changed in the interval". A region that
+changed both before and after the consumer's cursor is dirty in both cumulatives and
+cancels out. The consumer already captured that region at cursor `a`, so omitting it is a
+false negative: the backup succeeds and is silently missing blocks.
+
+**Why it survived review.** The two expressions coincide whenever no region is dirty on
+both sides of the interval. In small examples, in tests with sparse random history, and in
+any workload where blocks are written once, the bug is invisible. It only appears once a
+block is rewritten across a backup boundary — which is the normal case in production.
+
+**How it was caught.** A property test compared the accelerated implementation with the
+definition over 400 random ranges on a 120-generation history; 54 regions were missing from
+range `(99, 120]`. The fix is to compute the definition (OR the deltas) and to treat
+cumulatives as analysis-only.
+
+**Regression coverage.** `HistoryStore.CumulativeDifferenceIsNotTheIncrementalUnion`
+encodes the counterexample and asserts that the two expressions *differ*. It also asserts
+the specific region is present in `unionRange`, so a recurrence fails on the data-loss
+assertion rather than on a cosmetic one.
+
+**Consequence for Phase 4.** The acceleration must be a per-consumer pending bitmap
+(`bitmap-history.md` §3.2): OR-ed into each consumer's pending set at seal time, cleared at
+commit, rebuildable from deltas. Memory and per-seal cost are `O(consumers × bitmap)`,
+which is bounded and measurable — unlike replaying an unbounded number of deltas.

@@ -132,43 +132,81 @@ different baselines or epochs.
 
 ---
 
-## 3. Why both, and how they interact
+## 3. Why both, and what each one can and cannot do
 
-Deltas alone: answering "since generation 10" at generation 1000 costs 990 `OR`s of up to
-2 MiB each. That is ~2 s of memory bandwidth per query per consumer, and ten consumers
-can multiply it.
+Deltas alone answer every incremental question, at a cost proportional to the number of
+generations in the interval: "since generation 10" at generation 1000 costs 990 `OR`s of up
+to 2 MiB each.
 
-Cumulative checkpoints alone: cannot support per-generation queries, cannot reconstruct
-the interval `(10, 15]`, and make GC impossible without also making queries impossible.
+The obvious acceleration is wrong, and it is worth stating precisely because it is the most
+dangerous simplification in this domain.
 
-Combination:
+### 3.1 `Cum_b AND NOT Cum_a` is not "changed since a"
 
-```
-seals at . . . . . . . . . . . . . . . . . .
-deltas   D1 D2 D3 ... D16 D17 ... D32 ...
-cums         C16              C32              (K = 16, plus baseline C0)
-```
-
-Query for consumer at cursor 10, boundary 33:
+Let `Cum_k = OR(D_1..D_k)`. Then:
 
 ```
-Required = Cum_32 AND NOT C_16          // two bitmap ops
-Required |= D_33                        // tail, at most K-1 = 15 deltas
+Cum_b AND NOT Cum_a = { r : r changed somewhere in (a, b] AND r never changed in [1, a] }
 ```
 
-Worst-case cost is bounded by `K` deltas instead of the full history. `K` is a tuning
-constant, not a correctness parameter. `Cum_k` is **always** rebuildable from
-`D_1..D_k`; a missing or corrupt cumulative checkpoint is a performance event, never a
-correctness event. This is why cumulative checkpoints can be freely deleted by a GC that
-is running out of space.
+That is "**first** changed in `(a, b]`", not "changed in `(a, b]`". A region that changed
+both before and after the consumer's cursor is dirty in both cumulatives and cancels out.
 
-Retention interacts: to build `Required` you need `Cum_a` for some `a ≤ cursor` **and**
-all deltas in `(a, boundary]`. If `Cum_C` itself is gone, you must fall back to the
-nearest surviving cumulative below the cursor (or the baseline `C0` with an empty bitmap)
-and replay the deltas from there — which means the floor must be computed from the
-*checkpoint* grid, not only from cursors. See §5.
+A consumer at cursor `a` already captured the data as of `a`. It must receive every region
+that changed in `(a, b]`, **including** regions that also changed earlier. Dropping them is
+a false negative — silent data loss: the backup completes, reports success, and is missing
+blocks.
 
----
+This was found during Phase 3, not in review. The property test
+`HistoryStore.CumulativeDifferenceIsNotTheIncrementalUnion` shows a region changing in both
+periods and disappearing from the difference. No choice of checkpoint density or baseline
+fixes it, because the information ("did this region change in this interval?") has already
+been collapsed away.
+
+**Rule: a device-wide cumulative bitmap must never be used to compute an incremental
+range.** Any code that feeds `bitwiseAndNot(cumulativeTo, cumulativeFrom)` into a range
+query is a data-loss bug. `HistoryStore::unionRange` therefore computes the definition
+directly and carries a comment pointing at this section.
+
+### 3.2 The correct acceleration is per consumer
+
+"Changed since C" depends on C, so any exact acceleration must be parameterised by C. The
+only structure that works is a **pending bitmap per consumer**:
+
+```
+Pending_c  = OR of every delta sealed since consumer c's cursor
+query(c)   = Pending_c                              -- O(1), no computation
+seal(D_g)  = for each consumer c: Pending_c |= D_g   -- O(consumers) ORs per seal
+commit(c)  = Pending_c := empty
+```
+
+- Cost per seal: `consumers × bitmap`. At 10 consumers and 2 MiB, 20 MiB of OR per seal, a
+  few times per backup cycle. Bounded, and independent of history depth.
+- Cost per query: zero. Strictly better than checkpoint replay.
+- Memory: `consumers × bitmap`. 10 × 18 MiB at 10 TB = 180 MiB, configurable.
+- Rebuild: OR the deltas from the consumer's cursor. Deltas remain the source of truth, so
+  the pending bitmap is a cache and can be discarded at any time.
+
+This replaces the checkpoint-replay scheme that the earlier draft of this document
+proposed. It is Phase 4 work; Phase 3 ships the definition and the deltas it depends on.
+
+### 3.3 Then what are cumulative checkpoints for?
+
+`Cum_k` keeps legitimate **analysis** uses, none of which feed an incremental query:
+
+- "Which regions have **never** changed since the baseline?" (`NOT Cum_k`) — describes a
+  device's churn footprint and sanity-checks a full baseline.
+- Cross-checking an incremental result: every block in `union(a,b)` must satisfy
+  `Cum_b` (a free invariant, not a query implementation).
+- Diagnostic comparison of two historical states (`saveSnapshot`), where "first changed in
+  the interval" is the intended meaning.
+
+They are derivable, deletable, and must never be the only record of anything.
+
+### 3.4 Consequence for retention
+
+Because the pending bitmap is per consumer and rebuildable, GC never needs cumulative
+checkpoints for correctness. Deleting a checkpoint costs analysis capability only.
 
 ## 4. Comparison operations
 
@@ -179,7 +217,7 @@ ambiguous and the wrong interpretation silently produces wrong backups.
 | Operation | Meaning | Valid for | Consumer-facing use |
 |---|---|---|---|
 | `and` | regions dirty in both | deltas only (same generation) or cums (same baseline) | analysis |
-| `andNot(a,b)` | dirty in `a`, not in `b` | cums with same baseline; deltas of different gens | **`Cum_boundary AND NOT Cum_cursor` = required set (fast path)** |
+| `andNot(a,b)` | dirty in `a`, not in `b` | cums with same baseline; deltas of different gens | analysis only — **never the required set** (§3.1) |
 | `or` | union | deltas of any distinct gens; cums same baseline | **union since cursor (definition)** |
 | `xor` | changed in exactly one | same as above | analysis |
 

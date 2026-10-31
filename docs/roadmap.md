@@ -134,8 +134,9 @@ or(A,B)               == {10,20,30,40,50}
 ```
 
 Plus property tests from [bitmap-history.md](bitmap-history.md) §4:
-`union(a,c) == union(a,b) | union(b,c)`, and `union(a,b) == cum_b AND NOT cum_a` with cums
-rebuilt from deltas.
+`union(a,c) == union(a,b) | union(b,c)`, and the negative test
+`CumulativeDifferenceIsNotTheIncrementalUnion`, which pins the finding that
+`cum_b AND NOT cum_a` is **not** the incremental set (§3.1).
 
 Plus: `RebuildCumFromDeltas` — delete every cumulative checkpoint, rebuild, assert
 bit-identical results for 100 random queries.

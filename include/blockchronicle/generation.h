@@ -7,18 +7,17 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <shared_mutex>
 #include <vector>
 
 #include "blockchronicle/bitmap.h"
+#include "blockchronicle/seal.h"
 #include "blockchronicle/types.h"
 
 namespace blockchronicle {
 
-// A sealed generation's delta. Immutable by type: no caller can modify history.
-using SealedDelta = std::shared_ptr<const DirtyBitmap>;
+class HistoryStore;
 
 // Storage for the generation currently collecting writes.
 //
@@ -61,38 +60,26 @@ private:
     std::unique_ptr<std::atomic<Word>[]> words_;
 };
 
-// Persistence hook for the seal protocol.
-//
-// Call contract: invoked by GenerationManager while the device's exclusive lock
-// is held. It must make the delta durable before returning Ok. It must not call
-// back into the same GenerationManager (that would self-deadlock).
-//
-// Returning anything other than Ok aborts the seal completely: nothing is
-// published, the active generation keeps its bits and keeps collecting writes.
-class SealSink {
-public:
-    virtual ~SealSink() = default;
-    virtual Status commitDelta(Generation generation, const DirtyBitmap& delta) = 0;
-};
-
-// Owns the active generation, the seal protocol, and the visible sealed history
-// for one device.
+// Owns the active generation and the seal protocol for one device. Sealed
+// deltas are published into a HistoryStore, which owns retention and queries.
 //
 // Invariants:
 //   I1  exactly one generation is active
 //   I2  generation numbers are never reused
-//   I3  a generation appears in history only after its SealSink returned Ok
+//   I3  a generation becomes visible only after its HistoryStore commit returned Ok
 //   I4  no write is ever attributed to a sealed generation
 //   I5  history deltas are immutable
 //
 // Locking: stateMutex_ is held shared while marking and while reading metadata,
 // and exclusively for seal/erase. Sealing therefore waits for in-flight marks,
 // and a mark that begins during a seal is blocked until the new generation is
-// installed. That is the whole correctness argument for I4; there is no
-// per-generation lock and no lock-free rotation.
+// installed. Lock order is stateMutex_ then HistoryStore::mutex_; nothing takes
+// them in the other direction.
 class GenerationManager {
 public:
-    GenerationManager(const Geometry& geometry, Generation startGeneration, SealSink& sink);
+    // The device geometry is taken from the history store, so the two cannot
+    // disagree.
+    GenerationManager(HistoryStore& history, Generation startGeneration);
 
     GenerationManager(const GenerationManager&) = delete;
     GenerationManager& operator=(const GenerationManager&) = delete;
@@ -116,26 +103,17 @@ public:
     Generation lastSealedGeneration() const; // 0 when nothing has been sealed
     std::uint64_t activeDirtyCount() const;
 
-    // Sealed delta lookup. Returns NotFound for an unsealed or already reclaimed
-    // generation; never fabricates an empty bitmap.
+    // Delegates to the history store.
     Status delta(Generation generation, SealedDelta& out) const;
-
-    // Ascending list of visible sealed generations.
     std::vector<Generation> sealedGenerations() const;
-
-    // Retention support: removes a sealed generation. Returns false if absent.
-    // Callers are responsible for proving no consumer still needs it; this class
-    // deliberately has no opinion about consumers.
     bool eraseGeneration(Generation generation);
 
 private:
     Status sealLocked();
 
-    Geometry geometry_;
-    SealSink& sink_;
+    HistoryStore& history_;
     mutable std::shared_mutex stateMutex_;
     std::unique_ptr<ActiveBitmap> active_;
-    std::map<Generation, SealedDelta> history_;
     Generation lastSealed_ = 0;
 };
 

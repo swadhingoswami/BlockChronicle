@@ -3,6 +3,8 @@
 
 #include "blockchronicle/generation.h"
 
+#include "blockchronicle/history.h"
+
 #include <cassert>
 #include <limits>
 #include <mutex>
@@ -134,12 +136,9 @@ void ActiveBitmap::freeze(DirtyBitmap& out) const
 // GenerationManager
 // ---------------------------------------------------------------------------
 
-GenerationManager::GenerationManager(const Geometry& geometry,
-                                     Generation startGeneration,
-                                     SealSink& sink)
-    : geometry_(geometry)
-    , sink_(sink)
-    , active_(new ActiveBitmap(geometry, startGeneration))
+GenerationManager::GenerationManager(HistoryStore& history, Generation startGeneration)
+    : history_(history)
+    , active_(new ActiveBitmap(history.geometry(), startGeneration))
 {
 }
 
@@ -179,21 +178,20 @@ Status GenerationManager::sealLocked()
         return Status::InvalidState;
     }
 
-    DirtyBitmap frozen(geometry_);
+    DirtyBitmap frozen(history_.geometry());
     active_->freeze(frozen);
 
     // Durable before visible (invariant I3). If this fails, the active bitmap is
     // untouched and still collecting: the caller can retry without loss.
-    const Status status = sink_.commitDelta(closing, frozen);
+    const Status status = history_.commitDelta(closing, frozen);
     if (status != Status::Ok) {
         return status;
     }
 
-    history_[closing] = std::make_shared<const DirtyBitmap>(std::move(frozen));
     lastSealed_ = closing;
 
     // Only after publication does the new generation start accepting writes.
-    active_.reset(new ActiveBitmap(geometry_, closing + 1u));
+    active_.reset(new ActiveBitmap(history_.geometry(), closing + 1u));
     return Status::Ok;
 }
 
@@ -218,31 +216,19 @@ std::uint64_t GenerationManager::activeDirtyCount() const
 Status GenerationManager::delta(Generation generation, SealedDelta& out) const
 {
     std::shared_lock<std::shared_mutex> guard(stateMutex_);
-    const std::map<Generation, SealedDelta>::const_iterator it = history_.find(generation);
-    if (it == history_.end()) {
-        return Status::NotFound;
-    }
-    out = it->second;
-    return Status::Ok;
+    return history_.delta(generation, out);
 }
 
 std::vector<Generation> GenerationManager::sealedGenerations() const
 {
     std::shared_lock<std::shared_mutex> guard(stateMutex_);
-    std::vector<Generation> generations;
-    generations.reserve(history_.size());
-    for (std::map<Generation, SealedDelta>::const_iterator it = history_.begin();
-         it != history_.end();
-         ++it) {
-        generations.push_back(it->first);
-    }
-    return generations;
+    return history_.generations();
 }
 
 bool GenerationManager::eraseGeneration(Generation generation)
 {
     std::unique_lock<std::shared_mutex> guard(stateMutex_);
-    return history_.erase(generation) != 0u;
+    return history_.erase(generation);
 }
 
 } // namespace blockchronicle

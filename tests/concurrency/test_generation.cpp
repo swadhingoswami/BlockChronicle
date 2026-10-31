@@ -34,6 +34,7 @@
 #include <gtest/gtest.h>
 
 #include "blockchronicle/generation.h"
+#include "blockchronicle/history.h"
 #include "support/status_printer.h"
 
 namespace {
@@ -133,7 +134,8 @@ DirtyBitmap unionOfSealed(const GenerationManager& manager, const Geometry& geom
 TEST(GenerationManager, SealPublishesTheFrozenDelta)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
 
     ASSERT_EQ(manager.markWrite(10 * k64K, 1), Status::Ok);
     ASSERT_EQ(manager.markWrite(20 * k64K, 1), Status::Ok);
@@ -155,7 +157,8 @@ TEST(GenerationManager, SealPublishesTheFrozenDelta)
 TEST(GenerationManager, WritesAfterASealGoToTheNextGeneration)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
 
     ASSERT_EQ(manager.markWrite(10 * k64K, 1), Status::Ok);
     ASSERT_EQ(manager.seal(), Status::Ok);
@@ -178,7 +181,8 @@ TEST(GenerationManager, WritesAfterASealGoToTheNextGeneration)
 TEST(GenerationManager, EmptyGenerationStillSeals)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 7, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 7);
 
     ASSERT_EQ(manager.seal(), Status::Ok);
 
@@ -192,7 +196,8 @@ TEST(GenerationManager, EmptyGenerationStillSeals)
 TEST(GenerationManager, DeltaForUnknownGenerationIsNotFound)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
 
     SealedDelta delta;
     EXPECT_EQ(manager.delta(1, delta), Status::NotFound);
@@ -203,7 +208,8 @@ TEST(GenerationManager, DeltaForUnknownGenerationIsNotFound)
 TEST(GenerationManager, SealedDeltaIsImmutableByType)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
     ASSERT_EQ(manager.seal(), Status::Ok);
 
     SealedDelta delta;
@@ -222,7 +228,8 @@ TEST(GenerationManager, FailedSealLosesNothingAndRetrySucceeds)
 {
     const Geometry geometry = makeGeometry(64 * k64K);
     RecordingSink sink;
-    GenerationManager manager(geometry, 1, sink);
+    HistoryStore history(geometry, &sink);
+    GenerationManager manager(history, 1);
 
     // 1-2. Mark, then seal the first generation.
     ASSERT_EQ(manager.markWrite(10 * k64K, 1), Status::Ok);
@@ -259,7 +266,8 @@ TEST(GenerationManager, FailedSealLosesNothingAndRetrySucceeds)
 TEST(GenerationManager, MarkAfterFailedSealIsNotMisattributed)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
 
     ASSERT_EQ(manager.markWrite(5 * k64K, 1), Status::Ok);
     sink.failNextCommit();
@@ -281,7 +289,8 @@ TEST(GenerationManager, MarkAfterFailedSealIsNotMisattributed)
 TEST(GenerationManager, MarkInFlightDuringSealIsNotLost)
 {
     HandshakeSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
 
     std::atomic<Status> sealStatus{Status::InvalidState};
     std::thread sealer([&manager, &sealStatus]() {
@@ -319,7 +328,8 @@ TEST(GenerationManager, MarkInFlightDuringSealIsNotLost)
 TEST(GenerationManager, ConcurrentMarksOnTheSameRegionAreIdempotent)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
 
     constexpr int kThreads = 8;
     constexpr int kMarksPerThread = 20000;
@@ -345,7 +355,8 @@ TEST(GenerationManager, NoMarkLostAcrossConcurrentSeals)
     // 1024 regions = 64 MiB at the default granularity.
     const Geometry geometry = makeGeometry(1024 * k64K);
     RecordingSink sink;
-    GenerationManager manager(geometry, 1, sink);
+    HistoryStore history(geometry, &sink);
+    GenerationManager manager(history, 1);
 
     constexpr int kWriterThreads = 8;
     constexpr int kMarksPerWriter = 5000;
@@ -424,7 +435,8 @@ TEST(GenerationManager, NoMarkLostAcrossConcurrentSeals)
 TEST(GenerationManager, SealIfDirtyAtLeastRespectsTheThreshold)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
 
     ASSERT_TRUE(manager.markRegion(1));
     EXPECT_EQ(manager.sealIfDirtyAtLeast(3), Status::Ok);
@@ -444,7 +456,8 @@ TEST(GenerationManager, SealIfDirtyAtLeastRespectsTheThreshold)
 TEST(GenerationManager, EraseGenerationRemovesOnlyThatDelta)
 {
     RecordingSink sink;
-    GenerationManager manager(makeGeometry(64 * k64K), 1, sink);
+    HistoryStore history(makeGeometry(64 * k64K), &sink);
+    GenerationManager manager(history, 1);
     ASSERT_EQ(manager.seal(), Status::Ok);
     ASSERT_EQ(manager.seal(), Status::Ok);
 

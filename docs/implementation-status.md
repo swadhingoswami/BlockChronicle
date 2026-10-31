@@ -81,9 +81,58 @@ to the mark/seal protocol should be re-validated this way.
 
 ---
 
+## Phase 3 — History semantics: **done**
+
+Deliverable: `include/blockchronicle/history.h`, `src/core/history.cpp`,
+`include/blockchronicle/seal.h`, `tests/unit/test_history.cpp`.
+
+Sealed history moved out of `GenerationManager` into `HistoryStore`, which owns the
+deltas, the checkpoint grid and retention. `GenerationManager` publishes into it, so there
+is exactly one owner of history and one owner of the active generation.
+
+Verified:
+
+```bash
+ctest --test-dir build   # 60/60
+```
+
+Coverage:
+
+| Criterion | Test |
+|---|---|
+| `(from, to]` exclusive/inclusive semantics | `UnionIsExclusiveFromInclusiveTo` |
+| Empty interval is Ok and empty | `EmptyIntervalIsOkAndEmpty` |
+| Unsealed boundary refused, never partial | `UnsealedBoundaryIsNotFoundNotPartial` |
+| Reclaimed history refused | `ReclaimedHistoryIsNotFound` |
+| Non-contiguous commit rejected | `NonContiguousCommitIsRejected` |
+| Durable-commit failure is not published | `FailedDurableCommitIsNotPublished` |
+| Checkpoint grid at interval K | `CheckpointsAppearEveryInterval` |
+| Checkpoints rebuildable, results unchanged | `RebuildCheckpointsProducesIdenticalResults` |
+| Union is composable across split points | `UnionIsComposableAcrossSplitPoints` |
+| Union matches the naive oracle on random history | `UnionMatchesNaiveOracleOnRandomHistory` |
+| Queries stay correct after reclaiming history | `QueriesStayCorrectAfterReclaimingTheOldestGeneration` |
+| **Cumulative difference is not the incremental set** | `CumulativeDifferenceIsNotTheIncrementalUnion` |
+
+### Architecture finding: cumulative bitmaps are analysis-only
+
+The Phase 3 implementation initially used `Cum_b AND NOT Cum_a` to answer range queries,
+as the design documents specified. The property test found 54 missing regions in range
+`(99, 120]`: the formula computes "first changed in the interval", which drops every
+region changed on both sides of the cursor — a false negative, i.e. silent data loss.
+
+The implementation now computes the definition directly. Cumulatives remain available for
+analysis ("never changed since baseline") but never feed a range query. `docs/risks.md`
+§4 F1 records the finding; `architecture.md`, `consistency-model.md`, `bitmap-history.md`
+and `roadmap.md` were corrected.
+
+Consequence: the acceleration for Phase 4 is a **per-consumer pending bitmap**, not
+checkpoint replay. Cost is `O(consumers × bitmap)` per seal and `O(1)` per query.
+
+---
+
 ## Not yet started
 
-Phase 3 (history semantics), Phase 4 (consumers), Phase 5 (persistence/recovery),
+Phase 4 (consumers), Phase 5 (persistence/recovery),
 Phase 6 (simulator, CLI), Phase 7 (dm-era), Phase 8 (hardening).
 
 ## Known gaps in the current code

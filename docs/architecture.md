@@ -144,8 +144,9 @@ ignoring journal and index overhead. A 10 TB device is 18 MiB × 1000 = **18 GiB
 
 1. **Store deltas, not cumulative states, as the authoritative history.** Deltas cover
    only what actually changed since the last seal; on a quiet device they are nearly
-   empty. Cumulative states are *derived acceleration structures* kept every `K`
-   generations (recommended `K = 16`) and rebuildable from deltas.
+   empty. Cumulative states are *derived analysis structures* kept every `K`
+   generations (recommended `K = 16`) and rebuildable from deltas. They must not be used
+   to compute incremental ranges (§6, "Delta, cumulative, or both?").
 2. **Encode deltas sparsely**: presence bitmap over 64-bit words plus packed nonzero
    words, or range/RLE encoding. Dense layout remains as format flag `0` for Phase 1
    simplicity.
@@ -470,10 +471,14 @@ requires an unbroken chain from the oldest retained generation. If the chain is 
 the affected interval is invalid regardless of individual checksums passing.
 
 **Delta, cumulative, or both?**
-Both, with asymmetric roles. Deltas are authoritative and are the unit of retention,
-replay and GC. Cumulative bitmaps are derived, kept at intervals (`K = 16` seals) to
-answer "since generation X" with two bitmap operations instead of `N` unions, and are
-always rebuildable. Never make a cumulative bitmap the only record of an interval.
+Both, with asymmetric roles — and one correction found during Phase 3. Deltas are
+authoritative: the unit of retention, replay and GC. Cumulative bitmaps are derived and
+**analysis-only**: they answer "has this region ever changed since the baseline", never
+"changed since generation C". Computing `Cum_B AND NOT Cum_C` and calling it the
+incremental set is a silent data-loss bug, because it drops every region that changed on
+both sides of the cursor. See [bitmap-history.md](bitmap-history.md) §3.1.
+The exact acceleration is a per-consumer pending bitmap, OR-ed at each seal and cleared at
+commit (Phase 4).
 
 **Retention when one consumer is far behind?**
 The floor is `min(cursor_generation)` across all consumers with no explicit exemption,

@@ -69,23 +69,30 @@ For consumer `c` with cursor `C` and boundary `B` (`C ≤ B`):
 Required(c) = OR over g in (C, B] of D_g
 ```
 
-Equivalently, with a cumulative checkpoint `Cum_k` defined as `OR` of all `D_g` for
-`g ≤ k` from the baseline of epoch `E`:
+**There is no cumulative shortcut for this.** It is tempting to write
+`Required(c) = Cum_B AND NOT Cum_C`; that expression computes "first changed in
+`(C, B]`", which drops every region that changed on both sides of the cursor. It is a
+false negative and it is silent. See
+[bitmap-history.md](bitmap-history.md) §3.1 for the counterexample, which is also a
+regression test (`CumulativeDifferenceIsNotTheIncrementalUnion`).
 
-```
-Required(c) = Cum_B AND NOT Cum_C            (when checkpoints at exactly C and B exist)
-            = Cum_at(floor_ckpt ≤ C) AND NOT ...   (otherwise, replay the leftover tail)
-```
+The query is therefore computed from deltas, or from a **per-consumer pending bitmap**
+maintained incrementally at seal time (Phase 4). The pending bitmap is the only exact
+acceleration, because "changed since C" depends on C.
 
-The delta form is the definition; the cumulative form is an optimization. See
-[bitmap-history.md](bitmap-history.md) §3.
+### Why a per-consumer pending bitmap is the right structure
 
-### Why not a single "cumulative per consumer" bitmap?
+A single device-wide cumulative cannot answer "changed since C", and per-generation
+comparison, GC and the audit trail still need the deltas. So the design is:
 
-It would require `O(consumers × regions)` memory (10 × 2 MiB = 20 MiB, tolerable) but it
-does not remove the need for deltas: GC, per-generation comparison, and the audit trail
-all need `D_g`. Two structures that must agree are worse than one source of truth plus a
-cache. Cache it only if measurement demands it.
+- **Deltas are authoritative.** They are the unit of retention, replay, GC and history.
+- **Each consumer has one pending bitmap**, OR-ed with every delta at seal time and
+  cleared at commit. It is a cache: rebuildable from deltas, discardable at will.
+- **Cumulative checkpoints are analysis-only** and never feed a range query.
+
+Memory `consumers × bitmap` (180 MiB at 10 consumers × 10 TB) and per-seal cost
+`consumers × bitmap` are the price of an O(1) query. Both are measurable and bounded,
+unlike replaying an unbounded number of deltas.
 
 ---
 

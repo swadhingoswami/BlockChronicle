@@ -36,4 +36,5 @@ function(bc_add_test target source)
 endfunction()
 
 bc_add_test(bc_unit_tests unit/test_bitmap.cpp)
+bc_add_test(bc_history_tests unit/test_history.cpp)
 bc_add_test(bc_concurrency_tests concurrency/test_generation.cpp)
