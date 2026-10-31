@@ -194,10 +194,82 @@ but expensive.
 
 ---
 
+## Phase 5 — Persistence and recovery: **done for the simulator backend**
+
+Deliverables:
+
+```
+include/blockchronicle/{crc32c,codec,identity,superblock,delta_file,wal,
+                        crash_point,persistent_device}.h
+src/persistence/{crc32c,codec,identity,file_io,superblock,delta_file,wal,
+                 persistent_device}.cpp
+tests/persistence/test_persistence.cpp   20 tests
+tests/recovery/test_recovery.cpp         13 tests
+```
+
+On-disk layout, as designed: `manifest.bin` with two 4 KiB slots, one delta file per
+sealed generation, append-only WAL segments, explicit little-endian encoding everywhere,
+CRC32C on every object.
+
+Verified:
+
+```bash
+ctest --test-dir build        # 113/113
+ctest --test-dir build-asan   # 113/113
+ctest --test-dir build-tsan   # 113/113
+```
+
+### Crash matrix coverage
+
+| Row (metadata-format.md §7) | Test |
+|---|---|
+| 1–2 mark before/after data write | `MarkedButUnsealedWritesSurviveACrash` |
+| 3 torn delta file | covered by `DeltaFile.RejectsCorruptPayload` + atomic rename |
+| 4 crash after delta write, before SEAL | `CrashAfterDeltaWriteLeavesTheGenerationUnsealed` |
+| 5 crash after SEAL fsync | `CrashAfterSealRecordMakesTheGenerationDurable` |
+| 6 superblock slot torn | `Superblock.SurvivesOneCorruptSlot` |
+| 7 both slots torn | `Superblock.BothSlotsCorruptIsACorruptResult` |
+| 8 consumer commit durable, reply lost | `CrashAfterConsumerCommitKeepsTheCursor` |
+| 9 commit not durable | `Recovery` replay path + `CrashAfterConsumerCommit` |
+| 10 checkpoint before superblock | `CrashBeforeSuperblockWriteKeepsTheOldReplayPoint` |
+| 11 checkpoint after superblock | `CrashAfterSuperblockWriteKeepsTheNewReplayPoint` |
+| 12 torn WAL tail | `TornJournalTailIsDiscardedWithoutLosingAcknowledgedRecords` |
+| 12b corrupt mid-log | `Wal.MidLogCorruptionIsRefused` |
+| 13 unclean shutdown, unproven backend | `UncleanShutdownInvalidatesWhenTheBackendCannotProveCompleteness` |
+| 14 foreign metadata directory | `ForeignIdentityCannotOpen` |
+| 15 history gap | `MissingDeltaInvalidatesAndForcesFullBackups` |
+
+Not yet covered: row 3 as a real torn in-place write (only the atomic-rename path is
+exercised), row 11's stray-segment deletion, and row 15's partial (per-consumer)
+degradation — v1 invalidates the whole device instead, which is safe but coarse.
+
+### Ordering is mutation-verified; fsync is not
+
+Swapping the order in `commitDelta` (SEAL record before the delta file) makes
+`CrashAfterSealRecordMakesTheGenerationDurable` fail: replay finds a seal whose payload
+does not exist and invalidates. That confirms the tests detect ordering errors.
+
+They **cannot** confirm that `fsync` actually reached the platter: a process crash leaves
+the page cache intact, so a missing fsync is invisible to these tests. Proving durability
+requires machine-level power-cut testing or fault injection at the block layer. Until
+that exists, the fsync discipline is reviewed code, not verified behaviour. This is
+recorded as a residual risk, not a solved problem.
+
+### Deliberate deviations
+
+| Decision | Reason |
+|---|---|
+| Unclean shutdown resumes by default for the simulator | `journalMarks` makes every acknowledged mark durable before it is applied, so completeness *is* provable for that backend. A backend that cannot prove it must set `durableBeforeAck = false`, which `create()`/`open()` force to pair with `invalidateOnUncleanShutdown = true`. The unsafe combination is refused. |
+| Per-write WAL record in the simulator | The alternative is to claim `durableBeforeAck = true` without journaling, which would be a lie. Cost is one fsync per write; this is a test backend, not a production one. |
+| No history hash chain yet | The design called for SHA-256 chaining. Gap detection currently relies on the superblock's contiguous range, `HistoryStore`'s sequential-commit invariant, and a presence check on load. A chain would additionally detect a *consistent* rollback of the whole directory (restoring an older but internally valid set of files), which is not detected today. Tracked in `risks.md` Q6. |
+| Partial (per-consumer) degradation not implemented | Any delta failure invalidates the whole device. Safe, coarse, and simpler to reason about; refinement belongs to hardening. |
+| Orphan delta files are not deleted on recovery | They are unreferenced and will be overwritten when their generation is sealed again. Cosmetic until a GC pass exists. |
+
+---
+
 ## Not yet started
 
-Phase 5 (persistence/recovery), Phase 6 (simulator, CLI), Phase 7 (dm-era),
-Phase 8 (hardening).
+Phase 6 (simulator CLI, multi-device), Phase 7 (dm-era), Phase 8 (hardening).
 
 ## Known gaps in the current code
 

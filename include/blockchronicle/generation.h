@@ -130,7 +130,6 @@ private:
     ConsumerManager* consumers_;
     mutable std::shared_mutex stateMutex_;
     std::unique_ptr<ActiveBitmap> active_;
-    Generation lastSealed_ = 0;
 };
 
 } // namespace blockchronicle

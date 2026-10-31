@@ -42,6 +42,15 @@ struct BackupSession {
     SealedDelta pending; // empty and unused for a Full session
 };
 
+// Immutable view of a consumer, used by the persistence layer at checkpoint.
+struct ConsumerSnapshot {
+    ConsumerId consumerId;
+    BackupId lastBackupId = 0;
+    Generation cursor = 0;
+    Generation cursorEpoch = 0;
+    bool fullBackupRequired = true;
+};
+
 struct ConsumerStatus {
     ConsumerId consumerId;
     BackupId lastBackupId = 0;
@@ -115,6 +124,21 @@ public:
     Status abort(const BackupSession& session);
 
     Status status(const ConsumerId& id, ConsumerStatus& out) const;
+
+    // Checks that a commit would be accepted, without changing anything. The
+    // persistence layer needs this to write the WAL record before applying it.
+    Status validateCommit(const BackupSession& session, BackupId newBackupId) const;
+
+    // Restores a consumer from a checkpoint. Used only by recovery.
+    Status restoreConsumer(const ConsumerSnapshot& view);
+
+    // Recovery only: applies a committed consumer record without an open
+    // session. Idempotent, so replaying the same record twice is a no-op.
+    Status applyPersistedCommit(const ConsumerId& id,
+                                BackupId backupId,
+                                Generation boundary);
+
+    Status snapshot(std::vector<ConsumerSnapshot>& out) const;
 
     // --- seal notification -----------------------------------------------
 

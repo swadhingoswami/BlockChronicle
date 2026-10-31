@@ -270,6 +270,18 @@ Status HistoryStore::rebuildLocked()
     return Status::Ok;
 }
 
+void HistoryStore::dropAll()
+{
+    std::unique_lock<std::shared_mutex> guard(mutex_);
+    deltas_.clear();
+    checkpoints_.clear();
+    cumulative_.reset();
+    cumulativeValid_ = false;
+    firstGeneration_ = 0;
+    oldest_ = 0;
+    newest_ = 0;
+}
+
 // ---------------------------------------------------------------------------
 // Retention
 // ---------------------------------------------------------------------------

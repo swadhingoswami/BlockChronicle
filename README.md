@@ -10,8 +10,8 @@ durably across restarts, and answers per-consumer queries of the form:
 One tracked device serves many independent backup consumers, each with its own cursor.
 No consumer's success may destroy another consumer's history.
 
-**Status: Phase 4 of 8 — bitmap, generation, history and consumer layers implemented
-and tested (76 tests, three sanitizer configurations). No persistence, no Linux backend,
+**Status: Phase 5 of 8 — bitmap, generation, history, consumer and persistence layers
+implemented and tested (113 tests, three sanitizer configurations). No Linux backend and
 no CLI yet.**
 
 ---

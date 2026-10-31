@@ -16,7 +16,7 @@ loss; **S3** = operational or performance cost; **S4** = maintenance.
 | Q3 | Which identity source is authoritative per platform (WWN vs. serial vs. user-supplied)? | Phase 1 device model | yes |
 | Q4 | Retention default: bytes-first (`max_history_bytes`) or generations-first? | Phase 4/5 | yes — recommend bytes-first |
 | Q5 | Is consumer authorization in scope for v1 (multiple tenants vs. single root-owned service)? | API/IPC | yes |
-| Q6 | Hash for the history chain: SHA-256 (vendored) vs. BLAKE2s (vendored) vs. CRC64 only? | Phase 5 format freeze | yes |
+| Q6 | **Resolved for v1 as "no chain yet".** Per-object CRC32C is implemented; the cross-generation chain that the design called for is not. Consequence: a consistent rollback of the whole metadata directory is undetectable. Needs a decision before any multi-host or untrusted-storage deployment. | hardening | yes |
 | Q7 | License. | repo publication | yes |
 
 ---

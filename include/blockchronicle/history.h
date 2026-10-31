@@ -101,6 +101,10 @@ public:
     // Used by tests and by the persistence layer after recovery.
     Status rebuildCheckpoints();
 
+    // Drops every delta and checkpoint. Used only when tracking is invalidated:
+    // the generation counter keeps advancing, so numbers are never reused.
+    void dropAll();
+
     // --- retention -------------------------------------------------------
 
     // Removes the given generation from history. Only the oldest generation may

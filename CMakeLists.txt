@@ -40,7 +40,16 @@ add_library(bc_core STATIC
     src/core/generation.cpp
     src/core/history.cpp
     src/core/consumer.cpp
+    src/persistence/codec.cpp
+    src/persistence/crc32c.cpp
+    src/persistence/identity.cpp
+    src/persistence/file_io.cpp
+    src/persistence/superblock.cpp
+    src/persistence/delta_file.cpp
+    src/persistence/wal.cpp
+    src/persistence/persistent_device.cpp
 )
+target_include_directories(bc_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(BlockChronicle::core ALIAS bc_core)
 target_include_directories(bc_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 bc_set_project_warnings(bc_core)

@@ -151,6 +151,31 @@ Status ConsumerManager::beginSession(const ConsumerId& id,
     return Status::Ok;
 }
 
+Status ConsumerManager::validateCommit(const BackupSession& session,
+                                       BackupId newBackupId) const
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    const std::map<ConsumerId, Record>::const_iterator it = consumers_.find(session.consumerId);
+    if (it == consumers_.end()) {
+        return Status::NotFound;
+    }
+
+    const Record& record = it->second;
+
+    if (!record.sessionOpen || record.openSession != session.sessionId
+        || session.sessionId == 0u) {
+        return Status::InvalidState;
+    }
+    if (record.fullBackupRequired && session.kind != BackupKind::Full) {
+        return Status::InvalidState;
+    }
+    if (newBackupId <= record.lastBackupId) {
+        return Status::InvalidState;
+    }
+    return Status::Ok;
+}
+
 Status ConsumerManager::commit(BackupSession& session, BackupId newBackupId)
 {
     std::lock_guard<std::mutex> guard(mutex_);
@@ -244,6 +269,77 @@ Status ConsumerManager::status(const ConsumerId& id, ConsumerStatus& out) const
     return Status::Ok;
 }
 
+Status ConsumerManager::restoreConsumer(const ConsumerSnapshot& view)
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    if (consumers_.count(view.consumerId) != 0u) {
+        return Status::InvalidArgument;
+    }
+    if (consumers_.size() >= maxConsumers_) {
+        return Status::OutOfRange;
+    }
+
+    Record record;
+    record.lastBackupId = view.lastBackupId;
+    record.cursor = view.cursor;
+    record.cursorEpoch = view.cursorEpoch;
+    record.fullBackupRequired = view.fullBackupRequired;
+    record.pending = std::make_shared<const DirtyBitmap>(geometry_);
+
+    consumers_.emplace(view.consumerId, std::move(record));
+    return Status::Ok;
+}
+
+Status ConsumerManager::applyPersistedCommit(const ConsumerId& id,
+                                             BackupId backupId,
+                                             Generation boundary)
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    const std::map<ConsumerId, Record>::iterator it = consumers_.find(id);
+    if (it == consumers_.end()) {
+        return Status::NotFound;
+    }
+
+    Record& record = it->second;
+    if (backupId <= record.lastBackupId) {
+        return Status::Ok; // already applied
+    }
+
+    record.lastBackupId = backupId;
+    record.cursor = boundary;
+    record.cursorEpoch = deviceEpoch_;
+    record.fullBackupRequired = false;
+    record.sessionOpen = false;
+    record.openSession = 0;
+    record.openSessionBoundary = 0;
+    record.unacked.clear();
+    record.pending = std::make_shared<const DirtyBitmap>(geometry_);
+    return Status::Ok;
+}
+
+Status ConsumerManager::snapshot(std::vector<ConsumerSnapshot>& out) const
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    out.clear();
+    out.reserve(consumers_.size());
+    for (std::map<ConsumerId, Record>::const_iterator it = consumers_.begin();
+         it != consumers_.end();
+         ++it) {
+        ConsumerSnapshot view;
+        view.consumerId = it->first;
+        view.lastBackupId = it->second.lastBackupId;
+        view.cursor = it->second.cursor;
+        view.cursorEpoch = it->second.cursorEpoch;
+        view.fullBackupRequired = it->second.fullBackupRequired
+            || it->second.cursorEpoch != deviceEpoch_;
+        out.push_back(view);
+    }
+    return Status::Ok;
+}
+
 void ConsumerManager::onDeltaSealed(Generation generation, const DirtyBitmap& delta)
 {
     std::lock_guard<std::mutex> guard(mutex_);
@@ -260,6 +356,9 @@ void ConsumerManager::onDeltaSealed(Generation generation, const DirtyBitmap& de
         }
         if (record.cursorEpoch != deviceEpoch_) {
             continue;
+        }
+        if (generation <= record.cursor) {
+            continue; // already covered by the consumer's last backup
         }
 
         record.unacked.emplace_back(generation, std::make_shared<const DirtyBitmap>(delta));

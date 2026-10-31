@@ -198,8 +198,6 @@ Status GenerationManager::sealLocked()
         consumers_->onDeltaSealed(closing, frozen);
     }
 
-    lastSealed_ = closing;
-
     // Only after publication does the new generation start accepting writes.
     active_.reset(new ActiveBitmap(history_.geometry(), closing + 1u));
     return Status::Ok;
@@ -213,8 +211,10 @@ Generation GenerationManager::activeGeneration() const
 
 Generation GenerationManager::lastSealedGeneration() const
 {
+    // The history store is the authority: after recovery it knows about seals
+    // that this process never performed.
     std::shared_lock<std::shared_mutex> guard(stateMutex_);
-    return lastSealed_;
+    return history_.newestGeneration();
 }
 
 std::uint64_t GenerationManager::activeDirtyCount() const
@@ -232,7 +232,7 @@ Status GenerationManager::beginBackup(const ConsumerId& consumer, BackupSession&
     // Shared lock: marking continues, sealing is excluded. The boundary and the
     // pending set are therefore captured from the same consistent state.
     std::shared_lock<std::shared_mutex> guard(stateMutex_);
-    return consumers_->beginSession(consumer, lastSealed_, out);
+    return consumers_->beginSession(consumer, history_.newestGeneration(), out);
 }
 
 Status GenerationManager::delta(Generation generation, SealedDelta& out) const
