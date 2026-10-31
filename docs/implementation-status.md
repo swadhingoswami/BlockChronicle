@@ -284,7 +284,7 @@ docs/performance.md
 Verified:
 
 ```bash
-ctest --test-dir build   # 138/138
+ctest --test-dir build   # 140/140
 ```
 
 CLI walkthrough (each line a separate process, as the CLI is stateless):
@@ -383,6 +383,23 @@ below the checkpointed retention floor so reclaimed generations do not linger on
 | Analysis snapshots unimplemented | `saveSnapshot` / `listSnapshots` / `deleteSnapshot`, stored in a namespace separate from operational history, with a test asserting that deleting one never affects the chain. |
 | `consumer list` was a stub, no `consumer remove` | Both implemented, with `list()` on `ConsumerManager` and a `Consumers.ListAndRemove` test. |
 | Parser robustness untested | Deterministic adversarial suite: random buffers, truncation, exhaustive single-bit flips. 4 tests, run under ASan/UBSan. |
+| `device write` missing, so the CLI could not demonstrate an incremental backup | Added; the README walkthrough now shows real ranges from the real binary. |
+| Run-as-you-go demo missing | `examples/backup_simulation` (`bc_example_backup`) walks through full → incremental → restore, with a byte-for-byte comparison. |
+
+### Bugs found by using the product, not by testing it
+
+Writing the README walkthrough (one CLI process per command) exposed that
+`close()` checkpointed and truncated the journal **without sealing the active
+generation**. Marks for unsealed writes lived only in that journal, so a clean
+shutdown silently dropped acknowledged writes. Fixed by sealing at the start of
+`checkpointInternal`; regression test
+`CleanShutdownSealsPendingWritesBeforeTruncatingTheJournal`.
+
+The same exercise found the analysis-snapshot namespace collision described
+above, and that `ensureDirectory` could not create nested paths.
+
+Lesson recorded rather than glossed over: the in-process tests never caught these
+because they never crossed a process boundary. A CLI walkthrough is a test.
 
 ### Still missing
 

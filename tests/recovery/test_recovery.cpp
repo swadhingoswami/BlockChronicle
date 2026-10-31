@@ -789,4 +789,28 @@ TEST(Consumers, ListAndRemove)
     EXPECT_EQ(consumers[0].consumerId, "B");
 }
 
+
+TEST(Persistence, CleanShutdownSealsPendingWritesBeforeTruncatingTheJournal)
+{
+    // Regression: checkpoint() advances walFirstSequence and rotates the log.
+    // Marks in the still-active generation live only in that log, so without
+    // sealing first a clean shutdown silently dropped acknowledged writes.
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+
+    ASSERT_EQ(device->markWrite(5u * k64K, 1), Status::Ok);
+    ASSERT_EQ(device->close(), Status::Ok); // checkpoints and truncates
+    device.reset();
+
+    ASSERT_EQ(fixture.openDevice(device), Status::Ok);
+    EXPECT_GE(device->lastSealedGeneration(), 1u)
+        << "the pending generation must be sealed before the journal is cut";
+
+    DirtyBitmap out(device->geometry());
+    ASSERT_EQ(device->dirtySince(0, device->lastSealedGeneration(), out), Status::Ok);
+    EXPECT_TRUE(out.test(5))
+        << "a mark acknowledged before a clean shutdown must survive it";
+}
+
 } // namespace

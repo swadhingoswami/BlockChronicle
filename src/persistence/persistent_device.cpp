@@ -1085,7 +1085,16 @@ Status PersistentDevice::checkpoint()
 
 Status PersistentDevice::checkpointInternal()
 {
-    Status status = refreshConsumerStateLocked();
+    // Seal before truncating. Checkpointing advances walFirstSequence and rotates
+    // the log, which discards every record below it -- including the MarkRange
+    // records of the still-active generation, whose delta does not exist yet.
+    // Without this seal a clean shutdown would silently drop acknowledged writes.
+    Status status = manager_->sealIfDirtyAtLeast(1u);
+    if (status != Status::Ok) {
+        return status;
+    }
+
+    status = refreshConsumerStateLocked();
     if (status != Status::Ok) {
         return status;
     }

@@ -33,6 +33,7 @@ const char* kUsage =
     "  device list\n"
     "  device register <device-id> --data <file> --capacity <bytes>\n"
     "  device remove <device-id>\n"
+    "  device write <device-id> --offset <bytes> --length <bytes> [--value <0-255>]\n"
     "  consumer add <consumer-id> --device <device-id>\n"
     "  consumer list --device <device-id>\n"
     "  consumer remove <consumer-id> --device <device-id>\n"
@@ -135,6 +136,49 @@ int commandDeviceRemove(Engine& engine, const std::vector<std::string>& args)
         return fail("device remove", status);
     }
     std::cout << "removed " << deviceId << " (history deleted)\n";
+    return 0;
+}
+
+int commandDeviceWrite(Engine& engine, const std::vector<std::string>& args)
+{
+    const std::string deviceId = positionalAt(args, 2);
+    const std::string offsetText = valueOf(args, "--offset");
+    const std::string lengthText = valueOf(args, "--length");
+    const std::string valueText = valueOf(args, "--value");
+
+    if (deviceId.empty() || offsetText.empty() || lengthText.empty()) {
+        std::cerr << "usage: device write <device-id> --offset <bytes> "
+                     "--length <bytes> [--value <0-255>]\n";
+        return 1;
+    }
+
+    SimulatorDevice* device = nullptr;
+    Status status = engine.device(deviceId, device);
+    if (status != Status::Ok) {
+        return fail("device write", status);
+    }
+
+    const std::uint64_t offset = std::strtoull(offsetText.c_str(), nullptr, 10);
+    const std::uint64_t length = std::strtoull(lengthText.c_str(), nullptr, 10);
+    const unsigned long value =
+        valueText.empty() ? 0xA5ul : std::strtoul(valueText.c_str(), nullptr, 10);
+
+    // Streamed so that a large demonstration write does not need a large buffer.
+    constexpr std::uint64_t kChunk = 1u << 20;
+    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(kChunk),
+                                     static_cast<std::uint8_t>(value & 0xFFul));
+
+    std::uint64_t done = 0;
+    while (done < length) {
+        const std::uint64_t chunk = (length - done < kChunk) ? (length - done) : kChunk;
+        status = device->write(offset + done, chunk, buffer.data());
+        if (status != Status::Ok) {
+            return fail("device write", status);
+        }
+        done += chunk;
+    }
+
+    std::cout << "wrote " << length << " bytes at offset " << offset << "\n";
     return 0;
 }
 
@@ -641,6 +685,8 @@ int main(int argc, char** argv)
             result = commandDeviceRegister(engine, args);
         } else if (subcommand == "remove") {
             result = commandDeviceRemove(engine, args);
+        } else if (subcommand == "write") {
+            result = commandDeviceWrite(engine, args);
         } else {
             std::cout << kUsage;
         }

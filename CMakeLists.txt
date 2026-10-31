@@ -66,6 +66,13 @@ add_executable(blockchronicle src/cli/main.cpp)
 target_link_libraries(blockchronicle PRIVATE bc_core)
 bc_set_project_warnings(blockchronicle)
 
+option(BC_BUILD_EXAMPLES "Build the runnable examples" ON)
+if(BC_BUILD_EXAMPLES)
+    add_executable(bc_example_backup examples/backup_simulation/main.cpp)
+    target_link_libraries(bc_example_backup PRIVATE bc_core)
+    bc_set_project_warnings(bc_example_backup)
+endif()
+
 option(BC_BUILD_BENCHMARKS "Build the measurement tools" ON)
 if(BC_BUILD_BENCHMARKS)
     add_executable(bc_benchmark tools/benchmark.cpp)

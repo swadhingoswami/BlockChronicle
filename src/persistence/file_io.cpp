@@ -149,16 +149,50 @@ Status appendFile(const std::string& path, const std::vector<std::uint8_t>& data
 
 Status ensureDirectory(const std::string& path)
 {
-    if (::mkdir(path.c_str(), 0700) == 0) {
-        return Status::Ok;
+    if (path.empty()) {
+        return Status::InvalidArgument;
     }
-    if (errno == EEXIST) {
-        struct stat info;
-        if (::stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode)) {
-            return Status::Ok;
+
+    // mkdir -p semantics: a caller asking for <root>/devices/<id>/meta should not
+    // have to create each level itself.
+    std::string current;
+    std::size_t index = 0;
+    if (path[0] == '/') {
+        current = "/";
+        index = 1;
+    }
+
+    for (;;) {
+        const std::size_t next = path.find('/', index);
+        const std::string component = (next == std::string::npos)
+            ? path.substr(index)
+            : path.substr(index, next - index);
+
+        if (!component.empty()) {
+            if (current.empty()) {
+                current = component;
+            } else if (current == "/") {
+                current += component;
+            } else {
+                current += '/';
+                current += component;
+            }
+            if (::mkdir(current.c_str(), 0700) != 0 && errno != EEXIST) {
+                return Status::IoError;
+            }
         }
+
+        if (next == std::string::npos) {
+            break;
+        }
+        index = next + 1u;
     }
-    return errnoStatus();
+
+    struct stat info;
+    if (::stat(path.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) {
+        return Status::IoError;
+    }
+    return Status::Ok;
 }
 
 Status removeFile(const std::string& path)
