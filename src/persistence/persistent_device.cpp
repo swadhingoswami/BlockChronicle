@@ -587,6 +587,15 @@ Status PersistentDevice::seal()
     return manager_->seal();
 }
 
+Status PersistentDevice::sealIfDirty()
+{
+    std::lock_guard<std::mutex> guard(controlMutex_);
+    if (closed_) {
+        return Status::InvalidState;
+    }
+    return manager_->sealIfDirtyAtLeast(1u);
+}
+
 Generation PersistentDevice::activeGeneration() const
 {
     return manager_->activeGeneration();
@@ -685,6 +694,45 @@ Status PersistentDevice::commitBackup(BackupSession& session, BackupId newBackup
     return consumers_->commit(session, newBackupId);
 }
 
+Status PersistentDevice::commitBackupAt(const ConsumerId& id,
+                                        BackupId newBackupId,
+                                        Generation boundary)
+{
+    std::lock_guard<std::mutex> guard(controlMutex_);
+    if (closed_) {
+        return Status::InvalidState;
+    }
+
+    ConsumerStatus current;
+    Status status = consumers_->status(id, current);
+    if (status != Status::Ok) {
+        return status;
+    }
+    if (current.sessionOpen) {
+        return Status::InvalidState; // finish the in-process session instead
+    }
+    if (boundary < current.cursor) {
+        return Status::InvalidState; // cannot move a cursor backwards
+    }
+    if (newBackupId <= current.lastBackupId) {
+        return Status::InvalidState;
+    }
+
+    ByteWriter writer;
+    writer.string16(id);
+    writer.u64(newBackupId);
+    writer.u64(boundary);
+    writer.u64(current.cursor);
+
+    status = wal_->append(WalRecordType::ConsumerCommit, boundary, writer.data());
+    if (status != Status::Ok) {
+        return status;
+    }
+    crash_.hit("after_consumer_commit");
+
+    return consumers_->applyPersistedCommit(id, newBackupId, boundary);
+}
+
 Status PersistentDevice::abortBackup(const BackupSession& session)
 {
     std::lock_guard<std::mutex> guard(controlMutex_);
@@ -699,6 +747,13 @@ Status PersistentDevice::consumerStatus(const ConsumerId& id, ConsumerStatus& ou
 // ---------------------------------------------------------------------------
 // Checkpointing and shutdown
 // ---------------------------------------------------------------------------
+
+Status PersistentDevice::dirtySince(Generation fromExclusive,
+                                    Generation toInclusive,
+                                    DirtyBitmap& out) const
+{
+    return history_->unionRange(fromExclusive, toInclusive, out);
+}
 
 Status PersistentDevice::checkpoint()
 {

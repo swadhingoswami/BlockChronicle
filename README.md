@@ -10,9 +10,9 @@ durably across restarts, and answers per-consumer queries of the form:
 One tracked device serves many independent backup consumers, each with its own cursor.
 No consumer's success may destroy another consumer's history.
 
-**Status: Phase 5 of 8 — bitmap, generation, history, consumer and persistence layers
-implemented and tested (113 tests, three sanitizer configurations). No Linux backend and
-no CLI yet.**
+**Status: Phase 6 of 8 — the full userspace pipeline works end to end: bitmap,
+generations, history, consumers, durable metadata, crash recovery, a file-backed
+simulator, a multi-device engine and a CLI (116 tests). No Linux kernel backend yet.**
 
 ---
 
@@ -29,6 +29,7 @@ no CLI yet.**
 | [docs/risks.md](docs/risks.md) | Risk register, unresolved questions, assumptions that must be tested |
 | [docs/roadmap.md](docs/roadmap.md) | Phase 0–8 plan with concrete, falsifiable acceptance criteria |
 | [docs/implementation-status.md](docs/implementation-status.md) | What is implemented and proven, with the command that proves it |
+| [docs/performance.md](docs/performance.md) | Baseline measurements, with their caveats |
 
 ## Non-goals for v1
 
@@ -74,6 +75,14 @@ automatically if not installed.
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j
 ctest --test-dir build --output-on-failure
+```
+
+Quick start:
+
+```bash
+./build/blockchronicle device register disk1 --data /tmp/disk1.img --capacity 1073741824
+./build/blockchronicle consumer add backup-A --device disk1
+./build/blockchronicle backup start --device disk1 --consumer backup-A
 ```
 
 Sanitizer builds:

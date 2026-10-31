@@ -92,6 +92,11 @@ public:
     Status markWrite(std::uint64_t offsetBytes, std::uint64_t lengthBytes);
     Status seal();
 
+    // Seals only if the active generation has at least one dirty region. Used by
+    // the simulator so that "start a backup" establishes a boundary covering
+    // every write issued before the call.
+    Status sealIfDirty();
+
     // --- consumers -------------------------------------------------------
 
     Status addConsumer(const ConsumerId& id);
@@ -101,10 +106,21 @@ public:
                           std::uint64_t maxRanges,
                           std::vector<DirtyRange>& out) const;
     Status commitBackup(BackupSession& session, BackupId newBackupId);
+
+    // Stateless commit for callers that do not keep a session in memory (the CLI
+    // is one process per command). The caller asserts that the backup at
+    // `boundary` completed and its data is durable.
+    Status commitBackupAt(const ConsumerId& id, BackupId newBackupId, Generation boundary);
     Status abortBackup(const BackupSession& session);
     Status consumerStatus(const ConsumerId& id, ConsumerStatus& out) const;
 
     // --- lifecycle -------------------------------------------------------
+
+    // Union of every delta in (fromExclusive, toInclusive]. This is the
+    // definition, with no cumulative shortcut (docs/bitmap-history.md 3.1).
+    Status dirtySince(Generation fromExclusive,
+                      Generation toInclusive,
+                      DirtyBitmap& out) const;
 
     Status checkpoint();
     Status close();

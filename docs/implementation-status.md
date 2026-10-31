@@ -267,9 +267,74 @@ recorded as a residual risk, not a solved problem.
 
 ---
 
+## Phase 6 — Simulator, engine, CLI: **done**
+
+Deliverables:
+
+```
+include/blockchronicle/{simulator,engine}.h
+src/backend/simulator/simulator.cpp
+src/service/engine.cpp
+src/cli/main.cpp                 -> blockchronicle
+tools/benchmark.cpp              -> bc_benchmark
+tests/integration/test_backup_workflow.cpp
+docs/performance.md
+```
+
+Verified:
+
+```bash
+ctest --test-dir build   # 116/116
+```
+
+CLI walkthrough (each line a separate process, as the CLI is stateless):
+
+```bash
+blockchronicle --root /var/lib/bc device register disk1 --data /var/lib/bc/disk1.img --capacity 1073741824
+blockchronicle --root /var/lib/bc consumer add backup-A --device disk1
+blockchronicle --root /var/lib/bc backup start --device disk1 --consumer backup-A
+blockchronicle --root /var/lib/bc backup commit --device disk1 --consumer backup-A --backup-id 1 --boundary 12
+blockchronicle --root /var/lib/bc bitmap compare --device disk1 --from 12 --to 20
+blockchronicle --root /var/lib/bc status --device disk1
+```
+
+### The test that matters
+
+`BackupWorkflow.IncrementalRoundsReconstructTheDeviceExactly` is the only test in the
+project that compares the engine's output against *data* rather than against another
+bitmap. Over five rounds it:
+
+1. writes known patterns, seals, starts a backup;
+2. writes one more region **after** the snapshot and asserts the snapshot does not
+   contain it;
+3. transfers only the reported ranges into a shadow image;
+4. asserts the shadow equals the device contents at the boundary, byte for byte.
+
+A missing range keeps stale bytes and a leaked range corrupts the image, so both
+directions of the incremental contract are checked against real data.
+
+### Deviations and limits
+
+| Decision | Reason |
+|---|---|
+| Snapshot = full copy of the data file under the write lock | Simple and exactly correct at the boundary. O(capacity), so it is a test backend only; a real backend uses `dm-snapshot`/`dm-thin`. Measured at ~1.5 GiB/s, and it dominates "begin backup" in the benchmark. |
+| Registers/removes a device through a text registry file | The registry is a cache; each device's `manifest.bin` is authoritative, so a lost registry can be rebuilt. |
+| Identity derived from the device id (FNV-1a) | Makes registration reproducible for a simulator. A real backend reads the WWID. This is **not** identity validation and must not be mistaken for it. |
+| CLI commits by `--boundary` instead of holding a session | One process per command. The in-process API keeps sessions; the CLI variant is documented as "the caller asserts the data is durable". |
+| `consumer list` is a stub | It needs an enumeration API on `ConsumerManager` that nothing else requires yet. `status --device` covers the operational need. |
+
+### Measurement caveat
+
+`docs/performance.md` reports real numbers and states explicitly that the write
+throughput figures are **not** durable-write numbers: `fsync` on macOS does not flush the
+drive cache. Only the CPU-bound rows (range enumeration, seal serialization) transfer
+meaningfully to Linux. No performance target is claimed anywhere.
+
+---
+
 ## Not yet started
 
-Phase 6 (simulator CLI, multi-device), Phase 7 (dm-era), Phase 8 (hardening).
+Phase 7 (dm-era backend), Phase 8 (hardening).
 
 ## Known gaps in the current code
 
