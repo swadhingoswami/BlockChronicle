@@ -130,10 +130,74 @@ checkpoint replay. Cost is `O(consumers × bitmap)` per seal and `O(1)` per quer
 
 ---
 
+## Phase 4 — Consumers: **done (in-memory)**
+
+Deliverable: `include/blockchronicle/consumer.h`, `src/core/consumer.cpp`,
+`tests/unit/test_consumer.cpp`, `tests/concurrency/test_backup_concurrency.cpp`.
+
+Verified:
+
+```bash
+ctest --test-dir build        # 76/76
+ctest --test-dir build-asan   # 76/76
+ctest --test-dir build-tsan   # 76/76, no reports
+```
+
+Design as corrected in Phase 3: each consumer owns a **pending bitmap**, the OR of every
+delta sealed since its cursor, updated at seal time and rebuilt at commit. Queries are
+O(1) reads of an immutable snapshot; the device-wide cumulative checkpoints play no part.
+
+### The subtlety that drove the implementation
+
+Pending accumulates *past* an in-flight session's boundary, and OR cannot be subtracted.
+So committing at boundary `B` when seals have continued to `B+n` cannot simply clear
+pending (that loses `B+1..B+n`) nor keep it (that re-sends everything up to `B`). Each
+consumer therefore retains shared references to the unacknowledged deltas and rebuilds
+pending from the survivors on commit.
+
+Mutation-verified in both directions: `LateCommitRebuildsPendingWithoutDuplication` fails
+if commit clears pending, and fails again if commit never drops acknowledged deltas.
+Either mistake is a production data bug and neither is visible without the late-commit
+scenario.
+
+Coverage:
+
+| Criterion | Test |
+|---|---|
+| Duplicate / malformed / excess registration | `RegistersAndRejectsDuplicates`, `EnforcesMaxConsumers`, `RejectsMalformedIdentifiers` |
+| New consumer must baseline first | `NewConsumerRequiresAFullBaseline` |
+| Full session has no range list | `NewConsumerRequiresAFullBaseline` |
+| Ranges = union since own cursor | `IncrementalRangesCoverExactlyTheGenerationsSinceTheCursor` |
+| **Late commit loses nothing, re-sends nothing** | `LateCommitRebuildsPendingWithoutDuplication` |
+| Abort never advances | `AbortNeverAdvancesTheCursor` |
+| Stale backup ids and session reuse rejected | `CommitRejectsStaleBackupIdsAndReuse` |
+| The brief's A/B/C scenario, including A failing | `IndependentHistoriesSurviveAnotherConsumersSuccess` |
+| Ten independent cursors | `TenConsumersKeepIndependentCursors` |
+| Invalidation forces full backups | `InvalidationForcesFullBackupsAndKillsOpenSessions` |
+| Concurrent sessions under concurrent seals | `SessionsSeeExactlyTheirOwnBoundaryUnderConcurrentSeals` |
+
+### Deliberate deviations
+
+| Decision | Reason |
+|---|---|
+| `beginBackup` lives on `GenerationManager`, not a separate `Engine` | It is the only operation that must hold the device lock across boundary capture; introducing an `Engine` now would be a pass-through with a lock bug waiting to happen. Phase 6 adds `Engine` on top. |
+| Commit is not idempotent at this layer; the session is invalidated | Crash-safe idempotency belongs to WAL replay keyed by `(consumer, backupId)` (Phase 5). Two layers both trying to be idempotent is worse than one. |
+| Session `pending` is a shared_ptr snapshot, not a copy | 2 MiB memcpy per session avoided; the bitmap is immutable so sharing is safe. |
+
+### Known gap introduced here (Phase 5 must close it)
+
+Consumer state is in memory only. `ConsumerManager` holds shared references to deltas but
+has no `HistoryStore` reference, so after a restart it cannot rebuild `pending`. Phase 5
+must either persist consumer records or give the manager a rebuild path from
+`(cursor, history)`. Until then, a restart is equivalent to invalidation, which is safe
+but expensive.
+
+---
+
 ## Not yet started
 
-Phase 4 (consumers), Phase 5 (persistence/recovery),
-Phase 6 (simulator, CLI), Phase 7 (dm-era), Phase 8 (hardening).
+Phase 5 (persistence/recovery), Phase 6 (simulator, CLI), Phase 7 (dm-era),
+Phase 8 (hardening).
 
 ## Known gaps in the current code
 

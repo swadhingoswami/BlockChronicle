@@ -188,7 +188,14 @@ commit(c)  = Pending_c := empty
   the pending bitmap is a cache and can be discarded at any time.
 
 This replaces the checkpoint-replay scheme that the earlier draft of this document
-proposed. It is Phase 4 work; Phase 3 ships the definition and the deltas it depends on.
+proposed. It is implemented in Phase 4 (`ConsumerManager`); Phase 3 shipped the definition
+and the deltas it depends on. See `docs/implementation-status.md`.
+
+One consequence worth stating here because it is easy to get wrong in review: `pending`
+accumulates past an in-flight session's boundary, and OR cannot be subtracted. On commit
+at boundary `B`, the consumer rebuilds `pending` from the retained unacknowledged deltas
+rather than clearing or keeping it. Both naive alternatives are data bugs and both are
+covered by mutation-tested regression tests.
 
 ### 3.3 Then what are cumulative checkpoints for?
 

@@ -136,8 +136,11 @@ void ActiveBitmap::freeze(DirtyBitmap& out) const
 // GenerationManager
 // ---------------------------------------------------------------------------
 
-GenerationManager::GenerationManager(HistoryStore& history, Generation startGeneration)
+GenerationManager::GenerationManager(HistoryStore& history,
+                                     Generation startGeneration,
+                                     ConsumerManager* consumers)
     : history_(history)
+    , consumers_(consumers)
     , active_(new ActiveBitmap(history.geometry(), startGeneration))
 {
 }
@@ -188,6 +191,13 @@ Status GenerationManager::sealLocked()
         return status;
     }
 
+    // Consumers observe the delta only after it is durable and published, and
+    // while the device lock is held, so their pending sets and the session
+    // boundaries derived from lastSealed_ can never disagree.
+    if (consumers_ != nullptr) {
+        consumers_->onDeltaSealed(closing, frozen);
+    }
+
     lastSealed_ = closing;
 
     // Only after publication does the new generation start accepting writes.
@@ -211,6 +221,18 @@ std::uint64_t GenerationManager::activeDirtyCount() const
 {
     std::shared_lock<std::shared_mutex> guard(stateMutex_);
     return active_->countDirty();
+}
+
+Status GenerationManager::beginBackup(const ConsumerId& consumer, BackupSession& out)
+{
+    if (consumers_ == nullptr) {
+        return Status::Unsupported;
+    }
+
+    // Shared lock: marking continues, sealing is excluded. The boundary and the
+    // pending set are therefore captured from the same consistent state.
+    std::shared_lock<std::shared_mutex> guard(stateMutex_);
+    return consumers_->beginSession(consumer, lastSealed_, out);
 }
 
 Status GenerationManager::delta(Generation generation, SealedDelta& out) const

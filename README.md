@@ -10,7 +10,9 @@ durably across restarts, and answers per-consumer queries of the form:
 One tracked device serves many independent backup consumers, each with its own cursor.
 No consumer's success may destroy another consumer's history.
 
-**Status: Phase 0 — architecture review. No production code yet.**
+**Status: Phase 4 of 8 — bitmap, generation, history and consumer layers implemented
+and tested (76 tests, three sanitizer configurations). No persistence, no Linux backend,
+no CLI yet.**
 
 ---
 
@@ -26,6 +28,7 @@ No consumer's success may destroy another consumer's history.
 | [docs/linux-backend.md](docs/linux-backend.md) | `dm-era` feasibility assessment, scaling math, fallback options, custom target sketch |
 | [docs/risks.md](docs/risks.md) | Risk register, unresolved questions, assumptions that must be tested |
 | [docs/roadmap.md](docs/roadmap.md) | Phase 0–8 plan with concrete, falsifiable acceptance criteria |
+| [docs/implementation-status.md](docs/implementation-status.md) | What is implemented and proven, with the command that proves it |
 
 ## Non-goals for v1
 
@@ -60,8 +63,8 @@ arrangement for storage projects that ship both userspace tools and a kernel com
 
 ## Build
 
-Phase 1 builds on any POSIX host, including macOS, because `DirtyBitmap` and `Geometry`
-are platform-neutral C++17. Linux-only code appears at Phase 7 behind the
+The implemented layers build on any POSIX host, including macOS, because they are
+platform-neutral C++17. Linux-specific code appears at Phase 7 behind the
 `TrackingBackend` interface.
 
 Requires CMake ≥ 3.20 and a C++17 compiler (GCC 11+, Clang 14+). GoogleTest is fetched

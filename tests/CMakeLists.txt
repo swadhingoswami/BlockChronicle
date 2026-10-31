@@ -37,4 +37,6 @@ endfunction()
 
 bc_add_test(bc_unit_tests unit/test_bitmap.cpp)
 bc_add_test(bc_history_tests unit/test_history.cpp)
+bc_add_test(bc_consumer_tests unit/test_consumer.cpp)
 bc_add_test(bc_concurrency_tests concurrency/test_generation.cpp)
+bc_add_test(bc_backup_concurrency_tests concurrency/test_backup_concurrency.cpp)

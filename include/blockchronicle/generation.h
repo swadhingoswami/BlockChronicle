@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "blockchronicle/bitmap.h"
+#include "blockchronicle/consumer.h"
 #include "blockchronicle/seal.h"
 #include "blockchronicle/types.h"
 
@@ -78,8 +79,11 @@ private:
 class GenerationManager {
 public:
     // The device geometry is taken from the history store, so the two cannot
-    // disagree.
-    GenerationManager(HistoryStore& history, Generation startGeneration);
+    // disagree. `consumers` may be null; consumer-facing methods then return
+    // Status::Unsupported.
+    GenerationManager(HistoryStore& history,
+                      Generation startGeneration,
+                      ConsumerManager* consumers = nullptr);
 
     GenerationManager(const GenerationManager&) = delete;
     GenerationManager& operator=(const GenerationManager&) = delete;
@@ -103,6 +107,17 @@ public:
     Generation lastSealedGeneration() const; // 0 when nothing has been sealed
     std::uint64_t activeDirtyCount() const;
 
+    // Starts a backup session at the current sealed boundary.
+    //
+    // This is the only place a boundary and a pending set are captured, and both
+    // happen under the shared device lock, so a seal cannot interleave. That is
+    // the invariant proved in docs/consistency-model.md section 4: the boundary
+    // is the generation that was active when the snapshot was taken.
+    Status beginBackup(const ConsumerId& consumer, BackupSession& out);
+
+    ConsumerManager* consumers() { return consumers_; }
+    const ConsumerManager* consumers() const { return consumers_; }
+
     // Delegates to the history store.
     Status delta(Generation generation, SealedDelta& out) const;
     std::vector<Generation> sealedGenerations() const;
@@ -112,6 +127,7 @@ private:
     Status sealLocked();
 
     HistoryStore& history_;
+    ConsumerManager* consumers_;
     mutable std::shared_mutex stateMutex_;
     std::unique_ptr<ActiveBitmap> active_;
     Generation lastSealed_ = 0;
