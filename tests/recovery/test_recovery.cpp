@@ -708,4 +708,85 @@ TEST(Verify, ReportsUncleanShutdownWithoutFailing)
     EXPECT_FALSE(report.healthy());
 }
 
+
+// ---------------------------------------------------------------------------
+// Single-writer guard
+// ---------------------------------------------------------------------------
+
+TEST(Persistence, SecondOpenIsRefusedWhileTheFirstIsAlive)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> first;
+    ASSERT_EQ(fixture.createDevice(first), Status::Ok);
+
+    std::unique_ptr<PersistentDevice> second;
+    EXPECT_EQ(fixture.openDevice(second), Status::InvalidState)
+        << "two processes writing one metadata directory would corrupt it";
+    EXPECT_TRUE(second == nullptr);
+
+    first.reset(); // releases the lock
+
+    EXPECT_EQ(fixture.openDevice(second), Status::Ok);
+}
+
+// ---------------------------------------------------------------------------
+// Analysis snapshots
+// ---------------------------------------------------------------------------
+
+TEST(Snapshots, SaveListAndDeleteLeaveOperationalHistoryIntact)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+
+    ASSERT_EQ(device->markWrite(0, 1), Status::Ok);
+    ASSERT_EQ(device->seal(), Status::Ok);
+    ASSERT_EQ(device->markWrite(3u * k64K, 1), Status::Ok);
+    ASSERT_EQ(device->seal(), Status::Ok);
+
+    EXPECT_EQ(device->saveSnapshot(1, "diagnostic"), Status::Ok);
+    EXPECT_EQ(device->saveSnapshot(2, "before-upgrade"), Status::Ok);
+
+    std::vector<std::string> labels;
+    ASSERT_EQ(device->listSnapshots(labels), Status::Ok);
+    EXPECT_EQ(labels, (std::vector<std::string>{"before-upgrade", "diagnostic"}));
+
+    EXPECT_EQ(device->saveSnapshot(1, "bad/label"), Status::InvalidArgument);
+    EXPECT_EQ(device->saveSnapshot(99, "missing"), Status::NotFound);
+
+    ASSERT_EQ(device->deleteSnapshot("diagnostic"), Status::Ok);
+    EXPECT_EQ(device->deleteSnapshot("diagnostic"), Status::NotFound);
+
+    ASSERT_EQ(device->listSnapshots(labels), Status::Ok);
+    ASSERT_EQ(labels.size(), 1u);
+
+    // The operational chain is untouched: snapshots are a separate namespace.
+    DirtyBitmap out(device->geometry());
+    ASSERT_EQ(device->dirtySince(0, 2, out), Status::Ok);
+    EXPECT_EQ(out.countDirty(), 2u);
+}
+
+TEST(Consumers, ListAndRemove)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+
+    ASSERT_EQ(device->addConsumer("A"), Status::Ok);
+    ASSERT_EQ(device->addConsumer("B"), Status::Ok);
+
+    std::vector<ConsumerStatus> consumers;
+    ASSERT_EQ(device->listConsumers(consumers), Status::Ok);
+    ASSERT_EQ(consumers.size(), 2u);
+    EXPECT_EQ(consumers[0].consumerId, "A");
+    EXPECT_TRUE(consumers[0].fullBackupRequired);
+
+    EXPECT_EQ(device->removeConsumer("A"), Status::Ok);
+    EXPECT_EQ(device->removeConsumer("A"), Status::NotFound);
+
+    ASSERT_EQ(device->listConsumers(consumers), Status::Ok);
+    ASSERT_EQ(consumers.size(), 1u);
+    EXPECT_EQ(consumers[0].consumerId, "B");
+}
+
 } // namespace

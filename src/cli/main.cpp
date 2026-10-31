@@ -35,6 +35,10 @@ const char* kUsage =
     "  device remove <device-id>\n"
     "  consumer add <consumer-id> --device <device-id>\n"
     "  consumer list --device <device-id>\n"
+    "  consumer remove <consumer-id> --device <device-id>\n"
+    "  snapshot save --device <id> --generation <g> --label <name>\n"
+    "  snapshot list --device <id>\n"
+    "  snapshot delete --device <id> --label <name>\n"
     "  backup start --device <id> --consumer <id>\n"
     "  backup commit --device <id> --consumer <id> --backup-id <n> --boundary <gen>\n"
     "  bitmap compare --device <id> --from <gen> --to <gen>\n"
@@ -161,14 +165,114 @@ int commandConsumerList(Engine& engine, const std::vector<std::string>& args)
 {
     const std::string deviceId = valueOf(args, "--device");
     SimulatorDevice* device = nullptr;
-    const Status status = engine.device(deviceId, device);
+    Status status = engine.device(deviceId, device);
     if (status != Status::Ok) {
         return fail("consumer list", status);
     }
-    (void)device;
-    std::cerr << "note: listing consumers requires the in-process API; "
-                 "use 'status --device <id>'\n";
+
+    std::vector<ConsumerStatus> consumers;
+    status = device->listConsumers(consumers);
+    if (status != Status::Ok) {
+        return fail("consumer list", status);
+    }
+
+    if (consumers.empty()) {
+        std::cout << "no consumers\n";
+        return 0;
+    }
+
+    std::cout << "consumer\tcursor\tlast-backup\tstate\n";
+    for (std::size_t i = 0; i < consumers.size(); ++i) {
+        const char* state = consumers[i].fullBackupRequired ? "full-required"
+            : (consumers[i].sessionOpen ? "session-open" : "incremental");
+        std::cout << consumers[i].consumerId << "\t" << consumers[i].cursor << "\t"
+                  << consumers[i].lastBackupId << "\t" << state << "\n";
+    }
     return 0;
+}
+
+int commandConsumerRemove(Engine& engine, const std::vector<std::string>& args)
+{
+    const std::string consumerId = positionalAt(args, 2);
+    const std::string deviceId = valueOf(args, "--device");
+    if (consumerId.empty() || deviceId.empty()) {
+        std::cerr << "usage: consumer remove <consumer-id> --device <device-id>\n";
+        return 1;
+    }
+
+    SimulatorDevice* device = nullptr;
+    Status status = engine.device(deviceId, device);
+    if (status != Status::Ok) {
+        return fail("consumer remove", status);
+    }
+    status = device->removeConsumer(consumerId);
+    if (status != Status::Ok) {
+        return fail("consumer remove", status);
+    }
+    std::cout << "removed consumer " << consumerId << "\n";
+    return 0;
+}
+
+int commandSnapshot(Engine& engine, const std::vector<std::string>& args)
+{
+    const std::string subcommand = positionalAt(args, 1);
+    const std::string deviceId = valueOf(args, "--device");
+
+    SimulatorDevice* device = nullptr;
+    Status status = engine.device(deviceId, device);
+    if (status != Status::Ok) {
+        return fail("snapshot", status);
+    }
+
+    if (subcommand == "save") {
+        const std::string generation = valueOf(args, "--generation");
+        const std::string label = valueOf(args, "--label");
+        if (generation.empty() || label.empty()) {
+            std::cerr << "usage: snapshot save --device <id> --generation <g> "
+                         "--label <name>\n";
+            return 1;
+        }
+        status = device->saveSnapshot(std::strtoull(generation.c_str(), nullptr, 10),
+                                      label);
+        if (status != Status::Ok) {
+            return fail("snapshot save", status);
+        }
+        std::cout << "saved snapshot " << label << "\n";
+        return 0;
+    }
+
+    if (subcommand == "list") {
+        std::vector<std::string> labels;
+        status = device->listSnapshots(labels);
+        if (status != Status::Ok) {
+            return fail("snapshot list", status);
+        }
+        if (labels.empty()) {
+            std::cout << "no snapshots\n";
+            return 0;
+        }
+        for (std::size_t i = 0; i < labels.size(); ++i) {
+            std::cout << labels[i] << "\n";
+        }
+        return 0;
+    }
+
+    if (subcommand == "delete") {
+        const std::string label = valueOf(args, "--label");
+        if (label.empty()) {
+            std::cerr << "usage: snapshot delete --device <id> --label <name>\n";
+            return 1;
+        }
+        status = device->deleteSnapshot(label);
+        if (status != Status::Ok) {
+            return fail("snapshot delete", status);
+        }
+        std::cout << "deleted snapshot " << label << "\n";
+        return 0;
+    }
+
+    std::cerr << "usage: snapshot <save|list|delete> --device <id>\n";
+    return 1;
 }
 
 int commandBackupStart(Engine& engine, const std::vector<std::string>& args)
@@ -556,6 +660,8 @@ int main(int argc, char** argv)
         } else {
             std::cout << kUsage;
         }
+    } else if (command == "snapshot") {
+        result = commandSnapshot(engine, args);
     } else if (command == "bitmap" && subcommand == "compare") {
         result = commandBitmapCompare(engine, args);
     } else if (command == "status") {

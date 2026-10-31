@@ -446,6 +446,31 @@ Status SimulatorDevice::consumerStatus(const ConsumerId& id, ConsumerStatus& out
     return metadata_->consumerStatus(id, out);
 }
 
+Status SimulatorDevice::listConsumers(std::vector<ConsumerStatus>& out) const
+{
+    return metadata_->listConsumers(out);
+}
+
+Status SimulatorDevice::removeConsumer(const ConsumerId& id)
+{
+    return metadata_->removeConsumer(id);
+}
+
+Status SimulatorDevice::saveSnapshot(Generation generation, const std::string& label)
+{
+    return metadata_->saveSnapshot(generation, label);
+}
+
+Status SimulatorDevice::listSnapshots(std::vector<std::string>& labels) const
+{
+    return metadata_->listSnapshots(labels);
+}
+
+Status SimulatorDevice::deleteSnapshot(const std::string& label)
+{
+    return metadata_->deleteSnapshot(label);
+}
+
 Status SimulatorDevice::compareGenerations(Generation from,
                                            Generation to,
                                            DirtyBitmap& out) const

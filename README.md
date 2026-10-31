@@ -7,7 +7,7 @@
 [![ci](https://github.com/swadhingoswami/BlockChronicle/actions/workflows/ci.yml/badge.svg)](https://github.com/swadhingoswami/BlockChronicle/actions/workflows/ci.yml)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
-![Tests](https://img.shields.io/badge/tests-131-success)
+![Tests](https://img.shields.io/badge/tests-138-success)
 ![Platform](https://img.shields.io/badge/platform-Linux%20target-lightgrey)
 
 </div>
@@ -98,7 +98,7 @@ kernel backend is Linux-specific.
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build            # 131 tests
+ctest --test-dir build            # 138 tests
 
 ./build/blockchronicle device register disk1 --data /tmp/disk1.img --capacity 1073741824
 ./build/blockchronicle consumer add backup-A --device disk1
@@ -148,6 +148,8 @@ This project distinguishes "implemented" from "proven". The current evidence:
 | A consumer's ranges are exactly `union(cursor, boundary]` | property tests against a naive oracle |
 | The derived ranges match the data a consumer would restore | `IncrementalRoundsReconstructTheDeviceExactly` — byte-for-byte over five rounds |
 | Crash recovery loses no acknowledged fact | 15 crash points in `tests/recovery/` |
+| Two processes cannot corrupt one metadata directory | exclusive `flock`, `SecondOpenIsRefusedWhileTheFirstIsAlive` |
+| Every metadata parser survives arbitrary bytes | random, truncated and bit-flipped input under ASan/UBSan |
 | Retention never deletes history a consumer needs without invalidating it first | `PolicyThatWouldBreakAConsumerInvalidatesItFirst` |
 
 **Explicitly not proven:** that `fsync` reached the platter. A process crash leaves the
@@ -168,7 +170,7 @@ page cache intact, so the crash tests validate *ordering*, not durability. See
 | 7 | Linux `dm-era` backend | ⛔ blocked on hardware — probe and report templates ready |
 | 8 | Hardening: retention, `verify`, logging, config, CI, packaging | ✅ (no daemon yet) |
 
-`131 tests`, run under `RelWithDebInfo`, `ASan+UBSan` and `TSan` in CI.
+`138 tests`, run under `RelWithDebInfo`, `ASan+UBSan` and `TSan` in CI.
 
 ## Repository layout
 

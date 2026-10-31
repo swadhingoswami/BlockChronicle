@@ -360,6 +360,31 @@ Status ConsumerManager::snapshot(std::vector<ConsumerSnapshot>& out) const
     return Status::Ok;
 }
 
+Status ConsumerManager::list(std::vector<ConsumerStatus>& out) const
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    out.clear();
+    out.reserve(consumers_.size());
+    for (std::map<ConsumerId, Record>::const_iterator it = consumers_.begin();
+         it != consumers_.end();
+         ++it) {
+        const Record& record = it->second;
+        ConsumerStatus entry;
+        entry.consumerId = it->first;
+        entry.lastBackupId = record.lastBackupId;
+        entry.cursor = record.cursor;
+        entry.cursorEpoch = record.cursorEpoch;
+        entry.fullBackupRequired = record.fullBackupRequired
+            || record.cursorEpoch != deviceEpoch_;
+        entry.sessionOpen = record.sessionOpen;
+        entry.openSessionBoundary = record.openSessionBoundary;
+        entry.unackedGenerations = static_cast<std::uint64_t>(record.unacked.size());
+        out.push_back(entry);
+    }
+    return Status::Ok;
+}
+
 void ConsumerManager::onDeltaSealed(Generation generation, const DirtyBitmap& delta)
 {
     std::lock_guard<std::mutex> guard(mutex_);

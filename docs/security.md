@@ -38,6 +38,8 @@ an authenticated principal; the current design assumes a trusted caller.
 | Consumer ids: ≤ 128 chars, control characters rejected | `ConsumerManager::validateId` |
 | Config: unknown sections/keys and malformed values are errors | `parseConfig` |
 | Read-only `verify` that writes nothing | `verifyDevice` |
+| Single-writer guard: exclusive `flock` on `<dir>/LOCK`, second opener gets `InvalidState` | `internal::lockDirectory`, `Persistence.SecondOpenIsRefusedWhileTheFirstIsAlive` |
+| Parser robustness: every reader is fed random, truncated and bit-flipped input | `tests/persistence/test_parser_robustness.cpp` |
 | No path is built from unvalidated input; registry paths are used only after the id check | `Engine` |
 
 ## 4. Known gaps — state them, do not paper over them
@@ -57,11 +59,10 @@ an authenticated principal; the current design assumes a trusted caller.
 5. **Resource exhaustion is only partially bounded.** `max_consumers` is enforced,
    range queries take a limit, WAL payloads are capped at 1 MiB. There is no global cap on
    total metadata bytes or on concurrent sessions beyond one per consumer.
-6. **`flock` is specified but not yet implemented** in `PersistentDevice`. Two processes
-   pointing at one metadata directory will corrupt it. Do not run the CLI and a service
-   against the same root until this lands. (Tracked below.)
-7. **`verify` can race a live writer.** It reports what it sees; a torn tail during a live
-   append is normal and is reported as `torn-tail: yes`, not as an error.
+6. **`verify` can race a live writer.** It reports what it sees; a torn tail during a live
+   append is normal and is reported as `torn-tail: yes`, not as an error. Verification is
+   deliberately read-only and takes no lock, so it can inspect a store that a service is
+   using.
 
 ## 5. Required before any multi-tenant or remote deployment
 
@@ -69,7 +70,6 @@ an authenticated principal; the current design assumes a trusted caller.
 - Replace ad-hoc identity derivation with measured hardware identity (WWID + a
   BlockChronicle-written epoch marker in the backend's metadata device).
 - Implement the generation chain hash and decide whether it needs to be cryptographic.
-- Implement `flock` and a single-writer guard with a clear operator-facing error.
 - Add an audit trail for destructive operations (`device remove`, `gc`).
 
 ## 6. Review checklist for changes

@@ -46,10 +46,12 @@ bc_add_test(bc_consumer_tests unit/test_consumer.cpp)
 bc_add_test(bc_concurrency_tests concurrency/test_generation.cpp)
 bc_add_test(bc_backup_concurrency_tests concurrency/test_backup_concurrency.cpp)
 bc_add_test(bc_persistence_tests persistence/test_persistence.cpp)
+bc_add_test(bc_robustness_tests persistence/test_parser_robustness.cpp)
 bc_add_test(bc_recovery_tests recovery/test_recovery.cpp)
 bc_add_test(bc_workflow_tests integration/test_backup_workflow.cpp)
 
 # These two exercise the internal file helpers directly (fsync discipline and
 # torn-tail handling), so they need the private source include path.
 target_include_directories(bc_persistence_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bc_robustness_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(bc_recovery_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

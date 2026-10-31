@@ -128,6 +128,7 @@ public:
     Status abort(const BackupSession& session);
 
     Status status(const ConsumerId& id, ConsumerStatus& out) const;
+    Status list(std::vector<ConsumerStatus>& out) const;
 
     // Checks that a commit would be accepted, without changing anything. The
     // persistence layer needs this to write the WAL record before applying it.

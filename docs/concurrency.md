@@ -190,8 +190,11 @@ replay fixes it. Both directions are safe because the log is the truth.
 | clang-tidy | `bugprone-*`, `cppcoreguidelines-*` (subset), `performance-*` | advisory first, then blocking |
 | fuzz (libFuzzer) | header parsers: delta, WAL record, superblock, consumer record | nightly, 10 min per target |
 
-Fuzz targets are mandatory for Phase 5 acceptance. Every parser is a fuzz target, because
-every parser reads data that can be corrupt by definition.
+Every parser reads data that is corrupt by definition. What exists today is a deterministic
+adversarial suite (`tests/persistence/test_parser_robustness.cpp`): random buffers of every
+length up to 2 KiB, truncations, and an exhaustive single-bit-flip sweep over a valid delta
+file, all run under ASan/UBSan in CI. A coverage-guided libFuzzer harness remains deferred;
+the deterministic suite covers the cases that matter without a nightly job.
 
 Stress shapes (Phase 6):
 

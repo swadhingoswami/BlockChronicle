@@ -38,6 +38,10 @@ Status listDirectory(const std::string& path, std::vector<std::string>& names);
 
 bool fileExists(const std::string& path);
 
+// Takes an exclusive non-blocking flock on <directory>/LOCK. Returns
+// Status::InvalidState when another process holds it. The caller owns the fd.
+Status lockDirectory(const std::string& directory, int& fd);
+
 } // namespace internal
 } // namespace blockchronicle
 

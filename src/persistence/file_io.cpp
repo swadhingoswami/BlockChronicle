@@ -8,6 +8,7 @@
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -202,6 +203,23 @@ Status listDirectory(const std::string& path, std::vector<std::string>& names)
     }
 
     ::closedir(directory);
+    return Status::Ok;
+}
+
+Status lockDirectory(const std::string& directory, int& fd)
+{
+    fd = -1;
+    const std::string path = directory + "/LOCK";
+    const int handle = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (handle < 0) {
+        return Status::IoError;
+    }
+    if (::flock(handle, LOCK_EX | LOCK_NB) != 0) {
+        const bool busy = (errno == EWOULDBLOCK || errno == EAGAIN);
+        ::close(handle);
+        return busy ? Status::InvalidState : Status::IoError;
+    }
+    fd = handle;
     return Status::Ok;
 }
 

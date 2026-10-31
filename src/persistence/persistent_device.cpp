@@ -4,6 +4,10 @@
 #include "blockchronicle/persistent_device.h"
 
 #include <mutex>
+#include <unistd.h>
+
+#include <algorithm>
+#include <cstdio>
 #include <utility>
 
 #include "blockchronicle/codec.h"
@@ -109,7 +113,55 @@ PersistentDevice::PersistentDevice(std::string directory,
 {
 }
 
-PersistentDevice::~PersistentDevice() = default;
+PersistentDevice::~PersistentDevice()
+{
+    if (lockFd_ >= 0) {
+        ::close(lockFd_);
+        lockFd_ = -1;
+    }
+}
+
+namespace {
+
+// Holds the directory lock while open() validates the store, and hands it to the
+// device only on success. Closing the fd is what releases it.
+class LockHandover {
+public:
+    explicit LockHandover(int fd)
+        : fd_(fd)
+    {
+    }
+
+    ~LockHandover()
+    {
+        if (fd_ >= 0) {
+            ::close(fd_);
+        }
+    }
+
+    LockHandover(const LockHandover&) = delete;
+    LockHandover& operator=(const LockHandover&) = delete;
+
+    int release()
+    {
+        const int fd = fd_;
+        fd_ = -1;
+        return fd;
+    }
+
+private:
+    int fd_;
+};
+
+} // namespace
+
+Status PersistentDevice::lockDirectory()
+{
+    if (lockFd_ >= 0) {
+        return Status::Ok;
+    }
+    return internal::lockDirectory(directory_, lockFd_);
+}
 
 std::string PersistentDevice::manifestPath() const
 {
@@ -119,6 +171,11 @@ std::string PersistentDevice::manifestPath() const
 std::string PersistentDevice::walDirectory() const
 {
     return directory_ + "/wal";
+}
+
+std::string PersistentDevice::snapshotsDirectory() const
+{
+    return directory_ + "/snapshots";
 }
 
 std::string PersistentDevice::historyPath(Generation generation) const
@@ -160,6 +217,11 @@ Status PersistentDevice::create(const std::string& directory,
     if (status != Status::Ok) {
         return status;
     }
+    status = device->lockDirectory();
+    if (status != Status::Ok) {
+        return status; // another process owns this metadata directory
+    }
+
     if (internal::fileExists(device->manifestPath())) {
         return Status::InvalidState; // use open() for an existing store
     }
@@ -212,9 +274,16 @@ Status PersistentDevice::open(const std::string& directory,
         return Status::InvalidArgument;
     }
 
+    int lockFd = -1;
+    Status status = internal::lockDirectory(directory, lockFd);
+    if (status != Status::Ok) {
+        return status; // busy: another process is using this directory
+    }
+    LockHandover lock(lockFd);
+
     SuperblockState state;
     bool found = false;
-    Status status = superblockRead(directory + "/manifest.bin", expectedIdentity, state, found);
+    status = superblockRead(directory + "/manifest.bin", expectedIdentity, state, found);
     if (status != Status::Ok) {
         return status; // Corrupt: the caller quarantines, we do not guess
     }
@@ -306,6 +375,7 @@ Status PersistentDevice::open(const std::string& directory,
         device->recoveryState_ = RecoveryState::Clean;
     }
 
+    device->lockFd_ = lock.release();
     out = std::move(device);
     return Status::Ok;
 }
@@ -791,6 +861,94 @@ Status PersistentDevice::consumerStatus(const ConsumerId& id, ConsumerStatus& ou
 // ---------------------------------------------------------------------------
 // Checkpointing and shutdown
 // ---------------------------------------------------------------------------
+
+namespace {
+
+bool validSnapshotLabel(const std::string& label)
+{
+    if (label.empty() || label.size() > 64u) {
+        return false;
+    }
+    for (std::size_t i = 0; i < label.size(); ++i) {
+        const char c = label[i];
+        const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+            || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+        if (!allowed) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+Status PersistentDevice::saveSnapshot(Generation generation, const std::string& label)
+{
+    if (!validSnapshotLabel(label)) {
+        return Status::InvalidArgument;
+    }
+
+    std::lock_guard<std::mutex> guard(controlMutex_);
+    if (closed_) {
+        return Status::InvalidState;
+    }
+
+    SealedDelta delta;
+    const Status status = history_->delta(generation, delta);
+    if (status != Status::Ok) {
+        return status;
+    }
+
+    const std::string directory = snapshotsDirectory();
+    const Status directoryStatus = internal::ensureDirectory(directory);
+    if (directoryStatus != Status::Ok) {
+        return directoryStatus;
+    }
+
+    return deltaWrite(directory + "/" + label + ".bitmap", identity_, generation, *delta);
+}
+
+Status PersistentDevice::listSnapshots(std::vector<std::string>& labels) const
+{
+    labels.clear();
+
+    std::vector<std::string> names;
+    const Status status = internal::listDirectory(snapshotsDirectory(), names);
+    if (status == Status::NotFound) {
+        return Status::Ok;
+    }
+    if (status != Status::Ok) {
+        return status;
+    }
+
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        const std::string& name = names[i];
+        if (name.size() <= 7u || name.compare(name.size() - 7u, 7u, ".bitmap") != 0) {
+            continue;
+        }
+        labels.push_back(name.substr(0, name.size() - 7u));
+    }
+    std::sort(labels.begin(), labels.end());
+    return Status::Ok;
+}
+
+Status PersistentDevice::deleteSnapshot(const std::string& label)
+{
+    if (!validSnapshotLabel(label)) {
+        return Status::InvalidArgument;
+    }
+
+    const std::string path = snapshotsDirectory() + "/" + label + ".bitmap";
+    if (!internal::fileExists(path)) {
+        return Status::NotFound;
+    }
+    return internal::removeFile(path);
+}
+
+Status PersistentDevice::listConsumers(std::vector<ConsumerStatus>& out) const
+{
+    return consumers_->list(out);
+}
 
 Status PersistentDevice::dirtySince(Generation fromExclusive,
                                     Generation toInclusive,

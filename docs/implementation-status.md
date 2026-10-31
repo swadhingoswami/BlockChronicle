@@ -284,7 +284,7 @@ docs/performance.md
 Verified:
 
 ```bash
-ctest --test-dir build   # 116/116
+ctest --test-dir build   # 138/138
 ```
 
 CLI walkthrough (each line a separate process, as the CLI is stateless):
@@ -375,14 +375,24 @@ store's contiguity invariant and failed recovery with `InvalidState`. Replay now
 seals at or below the checkpointed `lastSealedGeneration`, and recovery prunes delta files
 below the checkpointed retention floor so reclaimed generations do not linger on disk.
 
+### Closed after the first review pass
+
+| Gap | Now |
+|---|---|
+| No single-writer guard | Exclusive `flock` on `<dir>/LOCK`; the second opener gets `InvalidState` (`SecondOpenIsRefusedWhileTheFirstIsAlive`). |
+| Analysis snapshots unimplemented | `saveSnapshot` / `listSnapshots` / `deleteSnapshot`, stored in a namespace separate from operational history, with a test asserting that deleting one never affects the chain. |
+| `consumer list` was a stub, no `consumer remove` | Both implemented, with `list()` on `ConsumerManager` and a `Consumers.ListAndRemove` test. |
+| Parser robustness untested | Deterministic adversarial suite: random buffers, truncation, exhaustive single-bit flips. 4 tests, run under ASan/UBSan. |
+
 ### Still missing
 
 | Item | Why it waits |
 |---|---|
 | Long-running daemon + `blockchronicle.service` | Nothing to serve continuously without a kernel backend. Packaging explains this rather than shipping a unit that idles. |
-| `flock` single-writer guard | Listed in `docs/security.md` as a known gap; two processes on one root will corrupt it. |
-| Metadata migration tooling | No format change has happened yet; the version fields exist. |
+| Coverage-guided libFuzzer harness | The deterministic adversarial suite covers the same inputs without a nightly job; revisit when a parser gains a new format field. |
+| Sparse bitmap encoding | Design and format flag exist; dense is correct and fast enough at measured sizes. |
 | Metrics endpoint | Needs the daemon. |
+| Metadata migration tooling | No format change has happened yet; version fields exist. |
 | Power-cut durability test | Needs Linux + hardware, same blocker as Phase 7. |
 
 ---

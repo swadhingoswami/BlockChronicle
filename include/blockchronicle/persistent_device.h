@@ -120,6 +120,18 @@ public:
     Status abortBackup(const BackupSession& session);
     Status consumerStatus(const ConsumerId& id, ConsumerStatus& out) const;
 
+    // --- analysis snapshots ----------------------------------------------
+    //
+    // Optional, user-labelled copies of a sealed generation's bitmap, kept for
+    // diagnostics and comparison. Deleting one never touches operational
+    // history (docs/bitmap-history.md 5.4).
+
+    Status saveSnapshot(Generation generation, const std::string& label);
+    Status listSnapshots(std::vector<std::string>& labels) const;
+    Status deleteSnapshot(const std::string& label);
+
+    Status listConsumers(std::vector<ConsumerStatus>& out) const;
+
     // --- lifecycle -------------------------------------------------------
 
     // Reclaims history no consumer still needs.
@@ -159,6 +171,8 @@ private:
                      const DeviceOptions& options,
                      CrashPoint& crash);
 
+    Status lockDirectory();
+    std::string snapshotsDirectory() const;
     Status initialiseFresh();
     Status initialiseFromCheckpoint();
     Status loadHistory();
@@ -180,6 +194,7 @@ private:
     std::string walDirectory() const;
 
     std::string directory_;
+    int lockFd_ = -1;
     MetadataIdentity identity_;
     Geometry geometry_;
     DeviceOptions options_;

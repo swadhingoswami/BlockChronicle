@@ -100,6 +100,12 @@ public:
     Status commitBackupAt(const ConsumerId& id, BackupId newBackupId, Generation boundary);
     Status abortBackup(const BackupSession& session);
     Status consumerStatus(const ConsumerId& id, ConsumerStatus& out) const;
+    Status listConsumers(std::vector<ConsumerStatus>& out) const;
+    Status removeConsumer(const ConsumerId& id);
+
+    Status saveSnapshot(Generation generation, const std::string& label);
+    Status listSnapshots(std::vector<std::string>& labels) const;
+    Status deleteSnapshot(const std::string& label);
     Status compareGenerations(Generation from, Generation to, DirtyBitmap& out) const;
 
     const MetadataIdentity& identity() const { return identity_; }
