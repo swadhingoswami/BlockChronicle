@@ -649,6 +649,8 @@ int main(int argc, char** argv)
             result = commandConsumerAdd(engine, args);
         } else if (subcommand == "list") {
             result = commandConsumerList(engine, args);
+        } else if (subcommand == "remove") {
+            result = commandConsumerRemove(engine, args);
         } else {
             std::cout << kUsage;
         }

@@ -243,4 +243,32 @@ TEST(BackupWorkflow, DataSurvivesCloseAndReopen)
     EXPECT_EQ(readBack, written);
 }
 
+
+TEST(BackupWorkflow, AnalysisSnapshotsSurviveADeviceReopen)
+{
+    WorkflowFixture fixture;
+    ASSERT_EQ(fixture.create(), Status::Ok);
+
+    std::vector<std::uint8_t> bytes(k64K, 0x3Cu);
+    ASSERT_EQ(fixture.device_->write(2u * k64K, k64K, bytes.data()), Status::Ok);
+    ASSERT_EQ(fixture.device_->seal(), Status::Ok);
+
+    ASSERT_EQ(fixture.device_->saveSnapshot(1, "diag"), Status::Ok);
+    ASSERT_EQ(fixture.device_->close(), Status::Ok);
+    fixture.device_.reset();
+
+    std::unique_ptr<SimulatorDevice> reopened;
+    ASSERT_EQ(SimulatorDevice::open(fixture.directory_.path() + "/meta",
+                                    fixture.directory_.path() + "/disk.img",
+                                    MetadataIdentity::fromSeed(41), DeviceOptions{},
+                                    fixture.crash_, reopened),
+              Status::Ok);
+
+    std::vector<std::string> labels;
+    ASSERT_EQ(reopened->listSnapshots(labels), Status::Ok);
+    ASSERT_EQ(labels.size(), 1u)
+        << "reopening a device must not discard analysis snapshots";
+    EXPECT_EQ(labels[0], "diag");
+}
+
 } // namespace

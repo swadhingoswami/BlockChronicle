@@ -137,7 +137,10 @@ SimulatorDevice::~SimulatorDevice()
 
 std::string SimulatorDevice::snapshotDirectory() const
 {
-    return metadataDirectory_ + "/snapshots";
+    // Transient copies taken at a backup boundary. Deliberately NOT "snapshots":
+    // that name belongs to the user-facing analysis snapshots stored by
+    // PersistentDevice, which must survive a reopen. This directory is wiped.
+    return metadataDirectory_ + "/work";
 }
 
 Status SimulatorDevice::ensureDataFile(std::uint64_t capacityBytes)
