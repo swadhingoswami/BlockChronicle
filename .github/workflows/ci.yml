@@ -14,11 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             compiler: gcc
             cc: gcc
             cxx: g++
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             compiler: clang
             cc: clang
             cxx: clang++
@@ -27,7 +27,7 @@ jobs:
             cc: clang
             cxx: clang++
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure
         env:
@@ -53,13 +53,13 @@ jobs:
 
   sanitizers:
     name: sanitizer (${{ matrix.sanitizer }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         sanitizer: [address,undefined,thread]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure
         env:
@@ -81,9 +81,9 @@ jobs:
 
   warnings:
     name: warnings-as-errors
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Configure
         env:
           CC: gcc
