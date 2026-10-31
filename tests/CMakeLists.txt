@@ -32,11 +32,16 @@ function(bc_add_test target source)
         Threads::Threads
     )
     bc_set_project_warnings(${target})
-    gtest_discover_tests(${target})
+
+    # PRE_TEST, not POST_BUILD: build-time discovery races when several test
+    # binaries are discovered in parallel and can silently register zero tests.
+    # A test that does not run is not evidence.
+    gtest_discover_tests(${target} DISCOVERY_MODE PRE_TEST)
 endfunction()
 
 bc_add_test(bc_unit_tests unit/test_bitmap.cpp)
 bc_add_test(bc_history_tests unit/test_history.cpp)
+bc_add_test(bc_service_tests unit/test_service.cpp)
 bc_add_test(bc_consumer_tests unit/test_consumer.cpp)
 bc_add_test(bc_concurrency_tests concurrency/test_generation.cpp)
 bc_add_test(bc_backup_concurrency_tests concurrency/test_backup_concurrency.cpp)

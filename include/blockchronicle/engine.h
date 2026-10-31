@@ -13,6 +13,7 @@
 
 #include "blockchronicle/crash_point.h"
 #include "blockchronicle/identity.h"
+#include "blockchronicle/log.h"
 #include "blockchronicle/simulator.h"
 #include "blockchronicle/types.h"
 
@@ -43,6 +44,12 @@ public:
 
     Status initialise();
 
+    // Applied to every device this engine opens or creates.
+    void setDeviceOptions(const DeviceOptions& options) { options_ = options; }
+
+    // Null by default: the library never writes to a stream unless asked.
+    void setLogger(Logger* logger) { logger_ = logger; }
+
     Status registerSimulatorDevice(const std::string& deviceId,
                                    const std::string& dataPath,
                                    std::uint64_t capacityBytes);
@@ -54,6 +61,10 @@ public:
     Status device(const std::string& deviceId, SimulatorDevice*& out);
 
     std::vector<DeviceRecord> records() const;
+
+    // The identity this engine derives for a device id. Exposed so that the
+    // read-only verifier can check a directory without opening the device.
+    static MetadataIdentity identityOf(const std::string& deviceId);
 
     Status closeAll();
 
@@ -69,6 +80,8 @@ private:
     std::map<std::string, DeviceRecord> records_;
     std::map<std::string, std::unique_ptr<SimulatorDevice>> open_;
     NoCrashPoint crash_;
+    DeviceOptions options_;
+    Logger* logger_ = nullptr;
 };
 
 } // namespace blockchronicle

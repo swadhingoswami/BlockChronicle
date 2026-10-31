@@ -1,0 +1,98 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: build (${{ matrix.os }}, ${{ matrix.compiler }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            cc: gcc
+            cxx: g++
+          - os: ubuntu-latest
+            compiler: clang
+            cc: clang
+            cxx: clang++
+          - os: macos-latest
+            compiler: clang
+            cc: clang
+            cxx: clang++
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: CLI smoke test
+        if: runner.os == 'Linux'
+        run: |
+          root="$(mktemp -d)"
+          ./build/blockchronicle --root "$root" device register d1 --data "$root/d1.img" --capacity 1048576
+          ./build/blockchronicle --root "$root" consumer add A --device d1
+          ./build/blockchronicle --root "$root" backup start --device d1 --consumer A
+          ./build/blockchronicle --root "$root" verify --device d1
+          rm -rf "$root"
+
+  sanitizers:
+    name: sanitizer (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address,undefined,thread]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        env:
+          CC: clang
+          CXX: clang++
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          -DBC_SANITIZE=${{ matrix.sanitizer }}
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Test
+        env:
+          # ThreadSanitizer is memory hungry on CI runners.
+          TSAN_OPTIONS: halt_on_error=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure
+
+  warnings:
+    name: warnings-as-errors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        env:
+          CC: gcc
+          CXX: g++
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBC_BUILD_BENCHMARKS=OFF
+      - name: Build
+        run: cmake --build build -j 4 2>&1 | tee build.log
+      - name: Fail on warnings
+        run: |
+          if grep -E "warning:" build.log; then
+            echo "warnings found" >&2
+            exit 1
+          fi

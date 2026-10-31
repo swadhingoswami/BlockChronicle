@@ -109,6 +109,25 @@ void ConsumerManager::invalidateAll()
     }
 }
 
+Status ConsumerManager::markFullBackupRequired(const ConsumerId& id)
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+
+    const std::map<ConsumerId, Record>::iterator it = consumers_.find(id);
+    if (it == consumers_.end()) {
+        return Status::NotFound;
+    }
+
+    Record& record = it->second;
+    record.fullBackupRequired = true;
+    record.sessionOpen = false;
+    record.openSession = 0;
+    record.openSessionBoundary = 0;
+    record.unacked.clear();
+    record.pending = std::make_shared<const DirtyBitmap>(geometry_);
+    return Status::Ok;
+}
+
 Status ConsumerManager::beginSession(const ConsumerId& id,
                                      Generation boundary,
                                      BackupSession& out)

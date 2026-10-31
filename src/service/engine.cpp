@@ -67,6 +67,11 @@ MetadataIdentity Engine::identityFor(const std::string& deviceId)
     return identity;
 }
 
+MetadataIdentity Engine::identityOf(const std::string& deviceId)
+{
+    return identityFor(deviceId);
+}
+
 Status Engine::initialise()
 {
     std::lock_guard<std::mutex> guard(mutex_);
@@ -199,10 +204,27 @@ Status Engine::device(const std::string& deviceId, SimulatorDevice*& out)
     std::unique_ptr<SimulatorDevice> handle;
     const Status status = SimulatorDevice::open(record->second.metadataDirectory,
                                                 record->second.dataPath,
-                                                identityFor(deviceId), DeviceOptions{},
+                                                identityFor(deviceId), options_,
                                                 crash_, handle);
     if (status != Status::Ok) {
+        if (logger_ != nullptr) {
+            logger_->log(LogLevel::Error, "engine",
+                         "event=device_open device=" + deviceId
+                             + " result=" + toString(status));
+        }
         return status;
+    }
+
+    if (logger_ != nullptr) {
+        const char* state = "clean";
+        switch (handle->recoveryState()) {
+        case RecoveryState::Created: state = "created"; break;
+        case RecoveryState::Clean: state = "clean"; break;
+        case RecoveryState::Replayed: state = "replayed"; break;
+        case RecoveryState::Invalidated: state = "invalidated"; break;
+        }
+        logger_->log(LogLevel::Info, "engine",
+                     "event=device_open device=" + deviceId + " recovery=" + state);
     }
 
     out = handle.get();

@@ -108,6 +108,10 @@ public:
     // is invalidated. Tracking correctness is preserved by forcing full backups.
     void invalidateAll();
 
+    // Forces one consumer to re-baseline. The run-time caller must make this
+    // durable (checkpoint) before deleting the history it no longer pins.
+    Status markFullBackupRequired(const ConsumerId& id);
+
     // --- session lifecycle -----------------------------------------------
 
     // boundary must be a sealed generation. A consumer requiring a baseline

@@ -233,6 +233,7 @@ Status PersistentDevice::open(const std::string& directory,
     std::unique_ptr<PersistentDevice> device(
         new PersistentDevice(directory, identity, geometry, options, crash));
     device->state_ = state;
+    device->checkpointedLastSealed_ = state.lastSealedGeneration;
 
     device->history_.reset(new HistoryStore(geometry, device.get()));
     device->consumers_.reset(
@@ -336,6 +337,43 @@ Status PersistentDevice::loadHistory()
     }
 
     replaying_ = false;
+    return pruneHistoryBelow(state_.oldestRetainedGeneration);
+}
+
+Status PersistentDevice::pruneHistoryBelow(Generation oldest)
+{
+    std::vector<std::string> names;
+    const Status status = internal::listDirectory(directory_ + "/history", names);
+    if (status == Status::NotFound) {
+        return Status::Ok;
+    }
+    if (status != Status::Ok) {
+        return status;
+    }
+
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        const std::string& name = names[i];
+        if (name.size() < 10u || name.compare(0, 4, "gen-") != 0
+            || name.compare(name.size() - 6u, 6u, ".delta") != 0) {
+            continue;
+        }
+
+        Generation generation = 0;
+        bool numeric = true;
+        for (std::size_t c = 4; c < name.size() - 6u; ++c) {
+            if (name[c] < '0' || name[c] > '9') {
+                numeric = false;
+                break;
+            }
+            generation = generation * 10u + static_cast<Generation>(name[c] - '0');
+        }
+        if (!numeric) {
+            continue;
+        }
+        if (generation < oldest) {
+            internal::removeFile(directory_ + "/history/" + name);
+        }
+    }
     return Status::Ok;
 }
 
@@ -385,9 +423,14 @@ Status PersistentDevice::applyReplayRecord(const WalRecord& record)
         if (historyInvalid_) {
             return Status::Ok;
         }
+        if (record.generation <= checkpointedLastSealed_) {
+            // The checkpoint already knows this generation. Its delta may have
+            // been reclaimed by GC, so it must not be re-inserted.
+            return Status::Ok;
+        }
         SealedDelta existing;
         if (history_->delta(record.generation, existing) == Status::Ok) {
-            return Status::Ok; // already covered by the checkpointed history
+            return Status::Ok;
         }
 
         DirtyBitmap delta(geometry_);
@@ -755,19 +798,10 @@ Status PersistentDevice::dirtySince(Generation fromExclusive,
     return history_->unionRange(fromExclusive, toInclusive, out);
 }
 
-Status PersistentDevice::checkpoint()
-{
-    std::lock_guard<std::mutex> guard(controlMutex_);
-    if (closed_) {
-        return Status::InvalidState;
-    }
-    return checkpointInternal();
-}
-
-Status PersistentDevice::checkpointInternal()
+Status PersistentDevice::refreshConsumerStateLocked()
 {
     std::vector<ConsumerSnapshot> snapshot;
-    Status status = consumers_->snapshot(snapshot);
+    const Status status = consumers_->snapshot(snapshot);
     if (status != Status::Ok) {
         return status;
     }
@@ -782,6 +816,119 @@ Status PersistentDevice::checkpointInternal()
         persisted.cursorEpoch = snapshot[i].cursorEpoch;
         persisted.fullBackupRequired = snapshot[i].fullBackupRequired;
         state_.consumers.push_back(persisted);
+    }
+    return Status::Ok;
+}
+
+Status PersistentDevice::collectGarbage(std::uint64_t keepGenerations, GcResult& out)
+{
+    std::lock_guard<std::mutex> guard(controlMutex_);
+    if (closed_) {
+        return Status::InvalidState;
+    }
+
+    out = GcResult();
+
+    const Generation oldest = history_->oldestGeneration();
+    const Generation newest = history_->newestGeneration();
+    if (oldest == 0u || newest == 0u) {
+        return Status::Ok;
+    }
+
+    std::vector<ConsumerSnapshot> consumers;
+    Status status = consumers_->snapshot(consumers);
+    if (status != Status::Ok) {
+        return status;
+    }
+
+    // Everything at or below a live cursor has already been delivered.
+    Generation dropThrough = newest;
+    for (std::size_t i = 0; i < consumers.size(); ++i) {
+        if (consumers[i].fullBackupRequired) {
+            continue;
+        }
+        if (consumers[i].cursor < dropThrough) {
+            dropThrough = consumers[i].cursor;
+        }
+    }
+
+    // Optional cap: keep at most N generations regardless of what consumers pin.
+    if (keepGenerations != 0u) {
+        const Generation policyFloor =
+            (newest + 1u > keepGenerations) ? (newest + 1u - keepGenerations) : 0u;
+        // A policy bound of F means generations < F may go, i.e. drop through
+        // F-1.
+        const Generation policyDrop = (policyFloor == 0u) ? 0u : (policyFloor - 1u);
+        if (policyDrop > dropThrough) {
+            dropThrough = policyDrop;
+        }
+    }
+
+    if (dropThrough < oldest) {
+        return Status::Ok; // nothing is reclaimable
+    }
+
+    // 1. Invalidate, durably, before anything is unlinked.
+    bool invalidatedAny = false;
+    for (std::size_t i = 0; i < consumers.size(); ++i) {
+        if (consumers[i].fullBackupRequired) {
+            continue;
+        }
+        if (consumers[i].cursor < dropThrough) {
+            status = consumers_->markFullBackupRequired(consumers[i].consumerId);
+            if (status != Status::Ok) {
+                return status;
+            }
+            out.invalidated.push_back(consumers[i].consumerId);
+            invalidatedAny = true;
+        }
+    }
+
+    if (invalidatedAny) {
+        status = refreshConsumerStateLocked();
+        if (status != Status::Ok) {
+            return status;
+        }
+        state_.oldestRetainedGeneration = dropThrough + 1u;
+        status = writeSuperblock();
+        if (status != Status::Ok) {
+            return status;
+        }
+        crash_.hit("after_gc_invalidate");
+    }
+
+    // 2. Unlink. Erase in ascending order: the store only allows dropping the
+    // oldest generation, which keeps the retained range contiguous.
+    for (Generation generation = oldest; generation <= dropThrough; ++generation) {
+        if (!history_->erase(generation)) {
+            break;
+        }
+        ++out.droppedGenerations;
+        out.droppedThrough = generation;
+    }
+
+    state_.oldestRetainedGeneration = (out.droppedThrough == 0u)
+        ? oldest
+        : (out.droppedThrough + 1u);
+    crash_.hit("after_gc");
+
+    return Status::Ok;
+}
+
+Status PersistentDevice::checkpoint()
+{
+    std::lock_guard<std::mutex> guard(controlMutex_);
+    if (closed_) {
+        return Status::InvalidState;
+    }
+    return checkpointInternal();
+}
+
+Status PersistentDevice::checkpointInternal()
+{
+    Status status = refreshConsumerStateLocked();
+    if (status != Status::Ok) {
+        return status;
     }
 
     state_.activeGeneration = manager_->activeGeneration();

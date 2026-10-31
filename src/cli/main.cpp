@@ -13,8 +13,11 @@
 #include <string>
 #include <vector>
 
+#include "blockchronicle/config.h"
 #include "blockchronicle/engine.h"
+#include "blockchronicle/log.h"
 #include "blockchronicle/simulator.h"
+#include "blockchronicle/verify.h"
 
 namespace {
 
@@ -36,7 +39,13 @@ const char* kUsage =
     "  backup commit --device <id> --consumer <id> --backup-id <n> --boundary <gen>\n"
     "  bitmap compare --device <id> --from <gen> --to <gen>\n"
     "  checkpoint --device <id>\n"
-    "  status --device <id>\n";
+    "  gc --device <id> [--keep-generations <n>]\n"
+    "  verify --device <id>\n"
+    "  status --device <id>\n"
+    "\n"
+    "Global options:\n"
+    "  --config <file>           INI configuration (root, max_consumers, journal_marks)\n"
+    "  --verbose                 structured logs on stderr\n";
 
 std::string valueOf(const std::vector<std::string>& args, const char* name)
 {
@@ -310,9 +319,124 @@ int commandStatus(Engine& engine, const std::vector<std::string>& args)
     return 0;
 }
 
+int commandGc(Engine& engine, const std::vector<std::string>& args)
+{
+    const std::string deviceId = valueOf(args, "--device");
+    const std::string keepText = valueOf(args, "--keep-generations");
+    const std::uint64_t keep =
+        keepText.empty() ? 0u : std::strtoull(keepText.c_str(), nullptr, 10);
+
+    // No --device means every registered device, which is what the maintenance
+    // timer unit calls.
+    if (deviceId.empty()) {
+        const std::vector<DeviceRecord> all = engine.records();
+        std::uint64_t dropped = 0;
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            SimulatorDevice* each = nullptr;
+            Status status = engine.device(all[i].deviceId, each);
+            if (status != Status::Ok) {
+                return fail("gc", status);
+            }
+            GcResult result;
+            status = each->collectGarbage(keep, result);
+            if (status != Status::Ok) {
+                return fail("gc", status);
+            }
+            dropped += result.droppedGenerations;
+        }
+        std::cout << "devices: " << all.size() << "\n";
+        std::cout << "dropped-generations: " << dropped << "\n";
+        return 0;
+    }
+
+    SimulatorDevice* device = nullptr;
+    Status status = engine.device(deviceId, device);
+    if (status != Status::Ok) {
+        return fail("gc", status);
+    }
+    (void)device;
+
+    // The collector lives on PersistentDevice, reached through the simulator.
+    GcResult result;
+    status = device->collectGarbage(keep, result);
+    if (status != Status::Ok) {
+        return fail("gc", status);
+    }
+
+    std::cout << "dropped-generations: " << result.droppedGenerations << "\n";
+    std::cout << "dropped-through: " << result.droppedThrough << "\n";
+    std::cout << "invalidated: " << result.invalidated.size() << "\n";
+    for (std::size_t i = 0; i < result.invalidated.size(); ++i) {
+        std::cout << "  " << result.invalidated[i] << "\n";
+    }
+    return 0;
+}
+
+int commandVerify(Engine& engine, const std::vector<std::string>& args)
+{
+    const std::string deviceId = valueOf(args, "--device");
+    if (deviceId.empty()) {
+        std::cerr << "usage: verify --device <id>\n";
+        return 1;
+    }
+
+    const std::vector<DeviceRecord> records = engine.records();
+    const DeviceRecord* found = nullptr;
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        if (records[i].deviceId == deviceId) {
+            found = &records[i];
+            break;
+        }
+    }
+    if (found == nullptr) {
+        return fail("verify", Status::NotFound);
+    }
+
+    VerifyReport report;
+    const Status status = verifyDevice(found->metadataDirectory,
+                                       Engine::identityOf(deviceId), report);
+    if (status != Status::Ok) {
+        return fail("verify", status);
+    }
+
+    std::cout << "superblock: " << (report.superblockValid ? "ok" : "bad") << "\n";
+    std::cout << "identity: " << (report.identityValid ? "ok" : "bad") << "\n";
+    std::cout << "history: " << (report.historyComplete ? "complete" : "with-gap") << "\n";
+    std::cout << "journal: " << (report.journalClean ? "clean" : "corrupt") << "\n";
+    std::cout << "torn-tail: " << (report.tornTail ? "yes" : "no") << "\n";
+    std::cout << "clean-shutdown: " << (report.uncleanShutdown ? "no" : "yes") << "\n";
+    std::cout << "generations-retained: " << report.generationsRetained << "\n";
+    std::cout << "journal-records: " << report.journalRecords << "\n";
+    std::cout << "consumers: " << report.consumers << "\n";
+    if (!report.firstError.empty()) {
+        std::cout << "first-error: " << report.firstError << "\n";
+    }
+    std::cout << "result: " << (report.healthy() ? "healthy" : "degraded") << "\n";
+
+    return report.healthy() ? 0 : 2;
+}
+
 int commandCheckpoint(Engine& engine, const std::vector<std::string>& args)
 {
     const std::string deviceId = valueOf(args, "--device");
+
+    if (deviceId.empty()) {
+        const std::vector<DeviceRecord> all = engine.records();
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            SimulatorDevice* each = nullptr;
+            const Status status = engine.device(all[i].deviceId, each);
+            if (status != Status::Ok) {
+                return fail("checkpoint", status);
+            }
+            const Status checkpointStatus = each->checkpoint();
+            if (checkpointStatus != Status::Ok) {
+                return fail("checkpoint", checkpointStatus);
+            }
+        }
+        std::cout << "checkpointed " << all.size() << " devices\n";
+        return 0;
+    }
+
     SimulatorDevice* device = nullptr;
     Status status = engine.device(deviceId, device);
     if (status != Status::Ok) {
@@ -332,6 +456,8 @@ int main(int argc, char** argv)
 {
     std::vector<std::string> args;
     std::string root;
+    std::string configPath;
+    bool verbose = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string current = argv[i];
@@ -339,6 +465,16 @@ int main(int argc, char** argv)
             if (i + 1 < argc) {
                 root = argv[++i];
             }
+            continue;
+        }
+        if (current == "--config") {
+            if (i + 1 < argc) {
+                configPath = argv[++i];
+            }
+            continue;
+        }
+        if (current == "--verbose") {
+            verbose = true;
             continue;
         }
         args.push_back(current);
@@ -349,12 +485,42 @@ int main(int argc, char** argv)
         return args.empty() ? 1 : 0;
     }
 
-    if (root.empty()) {
-        const char* fromEnvironment = std::getenv("BLOCKCHRONICLE_ROOT");
-        root = (fromEnvironment != nullptr) ? fromEnvironment : ".blockchronicle";
+    Config config;
+    if (!configPath.empty()) {
+        std::string error;
+        const Status configStatus = parseConfig(configPath, config, error);
+        if (configStatus != Status::Ok && configStatus != Status::NotFound) {
+            std::cerr << "error: config: " << error << "\n";
+            return 1;
+        }
+        if (configStatus == Status::NotFound) {
+            std::cerr << "error: config: no such file: " << configPath << "\n";
+            return 1;
+        }
     }
 
-    Engine engine(root);
+    if (root.empty()) {
+        const char* fromEnvironment = std::getenv("BLOCKCHRONICLE_ROOT");
+        if (fromEnvironment != nullptr) {
+            root = fromEnvironment;
+        }
+    }
+    if (!root.empty()) {
+        config.rootDirectory = root; // the command line wins over the file
+    }
+
+    // Quiet by default: a CLI command that succeeds should not narrate. Warnings
+    // and errors still reach stderr; --verbose adds per-device detail.
+    StderrLogger logger;
+    logger.setMinimumLevel(verbose ? LogLevel::Debug : LogLevel::Warn);
+
+    Engine engine(config.rootDirectory);
+    engine.setLogger(&logger);
+    DeviceOptions options;
+    options.maxConsumers = config.maxConsumers;
+    options.journalMarks = config.journalMarks;
+    engine.setDeviceOptions(options);
+
     Status status = engine.initialise();
     if (status != Status::Ok) {
         return fail("initialise", status);
@@ -394,6 +560,10 @@ int main(int argc, char** argv)
         result = commandBitmapCompare(engine, args);
     } else if (command == "status") {
         result = commandStatus(engine, args);
+    } else if (command == "gc") {
+        result = commandGc(engine, args);
+    } else if (command == "verify") {
+        result = commandVerify(engine, args);
     } else if (command == "checkpoint") {
         result = commandCheckpoint(engine, args);
     } else {

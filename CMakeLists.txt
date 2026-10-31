@@ -50,6 +50,9 @@ add_library(bc_core STATIC
     src/persistence/persistent_device.cpp
     src/backend/simulator/simulator.cpp
     src/service/engine.cpp
+    src/service/verify.cpp
+    src/service/log.cpp
+    src/service/config.cpp
 )
 target_include_directories(bc_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(BlockChronicle::core ALIAS bc_core)

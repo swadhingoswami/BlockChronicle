@@ -394,6 +394,11 @@ Status SimulatorDevice::checkpoint()
     return metadata_->checkpoint();
 }
 
+Status SimulatorDevice::collectGarbage(std::uint64_t keepGenerations, GcResult& out)
+{
+    return metadata_->collectGarbage(keepGenerations, out);
+}
+
 Status SimulatorDevice::close()
 {
     std::lock_guard<std::mutex> guard(dataMutex_);

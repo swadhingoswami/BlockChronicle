@@ -332,9 +332,65 @@ meaningfully to Linux. No performance target is claimed anywhere.
 
 ---
 
+## Phase 7 — dm-era backend: **blocked on hardware; harness ready**
+
+Deliverables:
+
+```
+tools/dm-era/probe.sh         8-step capability probe incl. a scratch era cycle
+tools/dm-era/experiments.sh   metadata growth, checkpoint latency, drain, snapshot
+docs/dm-era-report.md         report template (explicitly NOT RUN)
+```
+
+These cannot be executed on the development host (macOS). They are written to fail
+loudly rather than assume: every check interrogates the kernel, the scratch cycle
+reports the kernel's own error text, and the report template has no numbers in it.
+
+**Nothing about the Linux backend is claimed until this report is filled in.**
+
+## Phase 8 — Hardening: **partially done**
+
+Implemented:
+
+| Item | Where | Test |
+|---|---|---|
+| Structured logging (`ts= level= component= event=`) | `log.h/.cpp`, CLI `--verbose` | `Log.LineHasParseableFields` |
+| Config file with strict validation | `config.h/.cpp`, CLI `--config` | 6 config tests |
+| Read-only verification | `verify.h/.cpp`, CLI `verify` | 3 verify tests |
+| Retention / garbage collection | `PersistentDevice::collectGarbage`, CLI `gc` | 3 retention tests |
+| systemd maintenance timer | `packaging/` | manual |
+| Security review + checklist | `docs/security.md` | — |
+| CI (3 compilers, 3 sanitizers, warning gate) | `.github/workflows/ci.yml` | runs on push |
+
+### Retention is now implemented, and it found a recovery bug
+
+`collectGarbage` computes the drop bound from the youngest live cursor, optionally tightens
+it by `keepGenerations`, then **persists the invalidation of affected consumers before
+unlinking anything**. A crash between the two phases leaves the flags set and the files
+present, which is the safe direction.
+
+Writing the crash test exposed a real defect: after a GC, WAL replay still walked SEAL
+records for reclaimed generations and tried to re-insert them, which violates the history
+store's contiguity invariant and failed recovery with `InvalidState`. Replay now skips
+seals at or below the checkpointed `lastSealedGeneration`, and recovery prunes delta files
+below the checkpointed retention floor so reclaimed generations do not linger on disk.
+
+### Still missing
+
+| Item | Why it waits |
+|---|---|
+| Long-running daemon + `blockchronicle.service` | Nothing to serve continuously without a kernel backend. Packaging explains this rather than shipping a unit that idles. |
+| `flock` single-writer guard | Listed in `docs/security.md` as a known gap; two processes on one root will corrupt it. |
+| Metadata migration tooling | No format change has happened yet; the version fields exist. |
+| Metrics endpoint | Needs the daemon. |
+| Power-cut durability test | Needs Linux + hardware, same blocker as Phase 7. |
+
+---
+
 ## Not yet started
 
-Phase 7 (dm-era backend), Phase 8 (hardening).
+Phase 7 execution (requires Linux hardware with device mapper), and the daemon half of
+Phase 8.
 
 ## Known gaps in the current code
 

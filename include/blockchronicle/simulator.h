@@ -89,6 +89,7 @@ public:
     Status seal();
     Status sealIfDirty();
     Status checkpoint();
+    Status collectGarbage(std::uint64_t keepGenerations, GcResult& out);
     Status close();
 
     Status addConsumer(const ConsumerId& id);

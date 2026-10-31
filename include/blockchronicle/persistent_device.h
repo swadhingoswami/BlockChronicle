@@ -43,6 +43,12 @@ struct DeviceOptions {
     bool journalMarks = true;
 };
 
+struct GcResult {
+    Generation droppedThrough = 0;    // 0 when nothing was reclaimed
+    std::uint64_t droppedGenerations = 0;
+    std::vector<ConsumerId> invalidated;
+};
+
 enum class RecoveryState : std::uint8_t {
     Created = 0,     // brand new metadata directory
     Clean = 1,       // previous close was graceful, history intact
@@ -116,6 +122,18 @@ public:
 
     // --- lifecycle -------------------------------------------------------
 
+    // Reclaims history no consumer still needs.
+    //
+    // dropThrough = min(cursor over consumers that do not already require a full
+    // backup), lowered further by keepGenerations when that cap is tighter.
+    //
+    // Order is non-negotiable: consumers the policy would break are marked
+    // full-backup-required, and that state is made durable in the superblock,
+    // *before* any delta is unlinked. Deleting first and flagging afterwards
+    // would leave a window where a consumer believes it holds an incremental
+    // chain it can no longer reconstruct.
+    Status collectGarbage(std::uint64_t keepGenerations, GcResult& out);
+
     // Union of every delta in (fromExclusive, toInclusive]. This is the
     // definition, with no cumulative shortcut (docs/bitmap-history.md 3.1).
     Status dirtySince(Generation fromExclusive,
@@ -146,8 +164,13 @@ private:
     Status loadHistory();
     Status replayJournal();
     Status rebuildPending();
+    // Removes delta files below the checkpointed retention floor. The superblock
+    // is the authority; files below it are garbage from a crash between the
+    // floor update and the unlink.
+    Status pruneHistoryBelow(Generation oldest);
     Status writeSuperblock();
     Status checkpointInternal();
+    Status refreshConsumerStateLocked();
     Status applyReplayRecord(const WalRecord& record);
     Status journalMark(std::uint64_t offsetBytes, std::uint64_t lengthBytes);
     void invalidateTracking();
@@ -173,6 +196,10 @@ private:
     bool replaying_ = false;
     bool closed_ = false;
     bool historyInvalid_ = false;
+    // Highest generation the checkpoint already accounts for. SEAL records at or
+    // below it are skipped during replay: their deltas may have been reclaimed by
+    // GC, and re-inserting them would violate the store's contiguity invariant.
+    Generation checkpointedLastSealed_ = 0;
     // Marks replayed from the WAL whose generation is still active.
     std::vector<DirtyRange> pendingMarks_;
     std::uint64_t lastReplayedSequence_ = 0;

@@ -1,0 +1,25 @@
+[Unit]
+Description=BlockChronicle metadata checkpoint and retention
+Documentation=https://github.com/blockchronicle/blockchronicle
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+
+# Flush the superblock, then reclaim history no consumer still needs.
+# Both commands operate on every registered device when --device is omitted.
+ExecStart=/usr/local/bin/blockchronicle checkpoint
+ExecStart=/usr/local/bin/blockchronicle gc --keep-generations 512
+
+# Never let a metadata problem cascade into a restart loop.
+Restart=no
+
+# The service needs access to the metadata tree and to the device files it
+# tracks. Keep it stricter than the defaults.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/blockchronicle

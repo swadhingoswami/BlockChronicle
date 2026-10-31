@@ -10,9 +10,12 @@ durably across restarts, and answers per-consumer queries of the form:
 One tracked device serves many independent backup consumers, each with its own cursor.
 No consumer's success may destroy another consumer's history.
 
-**Status: Phase 6 of 8 — the full userspace pipeline works end to end: bitmap,
-generations, history, consumers, durable metadata, crash recovery, a file-backed
-simulator, a multi-device engine and a CLI (116 tests). No Linux kernel backend yet.**
+**Status: Phase 8 of 8 for the userspace engine — the whole pipeline works end to end:
+bitmap, generations, history, consumers, durable metadata, crash recovery, retention, a
+file-backed simulator, a multi-device engine, a CLI and read-only verification
+(131 tests). The Linux kernel backend (Phase 7) is blocked on hardware: the probe and
+measurement scripts are ready in `tools/dm-era/`, and no claim about it is made until
+`docs/dm-era-report.md` is filled in.**
 
 ---
 
@@ -30,6 +33,8 @@ simulator, a multi-device engine and a CLI (116 tests). No Linux kernel backend 
 | [docs/roadmap.md](docs/roadmap.md) | Phase 0–8 plan with concrete, falsifiable acceptance criteria |
 | [docs/implementation-status.md](docs/implementation-status.md) | What is implemented and proven, with the command that proves it |
 | [docs/performance.md](docs/performance.md) | Baseline measurements, with their caveats |
+| [docs/security.md](docs/security.md) | Threat model, implemented controls, known gaps |
+| [docs/dm-era-report.md](docs/dm-era-report.md) | Linux backend measurements — template, not yet run |
 
 ## Non-goals for v1
 

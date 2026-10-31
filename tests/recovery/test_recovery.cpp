@@ -19,6 +19,7 @@
 #include "blockchronicle/crash_point.h"
 #include "blockchronicle/persistent_device.h"
 #include "blockchronicle/delta_file.h"
+#include "blockchronicle/verify.h"
 #include "persistence/file_io.h"
 #include "support/status_printer.h"
 #include "support/temp_dir.h"
@@ -515,6 +516,196 @@ TEST(Recovery, UnsafeConfigurationIsRefused)
     EXPECT_EQ(PersistentDevice::create(directory.path(), identity, geometry, options,
                                        crash, device),
               Status::InvalidArgument);
+}
+
+
+// ---------------------------------------------------------------------------
+// Retention (garbage collection)
+// ---------------------------------------------------------------------------
+
+TEST(Retention, GarbageCollectionDropsOnlyDeliveredGenerations)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_EQ(device->markWrite(static_cast<std::uint64_t>(i) * k64K, 1), Status::Ok);
+        ASSERT_EQ(device->seal(), Status::Ok);
+    }
+
+    ASSERT_EQ(device->addConsumer("A"), Status::Ok);
+    BackupSession baseline;
+    ASSERT_EQ(device->beginBackup("A", baseline), Status::Ok);
+    ASSERT_EQ(baseline.boundary, 5u);
+    ASSERT_EQ(device->commitBackup(baseline, 1), Status::Ok);
+
+    GcResult result;
+    ASSERT_EQ(device->collectGarbage(0, result), Status::Ok);
+    EXPECT_EQ(result.droppedGenerations, 5u);
+    EXPECT_EQ(result.droppedThrough, 5u);
+    EXPECT_TRUE(result.invalidated.empty()) << "A had already received generations 1..5";
+
+    // A still gets everything after its cursor.
+    ASSERT_EQ(device->markWrite(9u * k64K, 1), Status::Ok);
+    ASSERT_EQ(device->seal(), Status::Ok);
+
+    BackupSession session;
+    ASSERT_EQ(device->beginBackup("A", session), Status::Ok);
+    std::vector<DirtyRange> ranges;
+    ASSERT_EQ(device->getDirtyRanges(session, 4096, ranges), Status::Ok);
+    ASSERT_EQ(ranges.size(), 1u);
+    EXPECT_EQ(ranges[0].offsetBytes, 9u * k64K);
+    ASSERT_EQ(device->abortBackup(session), Status::Ok);
+}
+
+TEST(Retention, PolicyThatWouldBreakAConsumerInvalidatesItFirst)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+
+    for (int i = 0; i < 10; ++i) {
+        ASSERT_EQ(device->markWrite(static_cast<std::uint64_t>(i) * k64K, 1), Status::Ok);
+        ASSERT_EQ(device->seal(), Status::Ok);
+    }
+
+    ASSERT_EQ(device->addConsumer("A"), Status::Ok);
+    BackupSession baseline;
+    ASSERT_EQ(device->beginBackup("A", baseline), Status::Ok);
+    ASSERT_EQ(baseline.boundary, 10u);
+
+    // Put A's cursor back at generation 1 by committing only what a baseline at
+    // 1 would have: simulate by aborting and using the stateless path.
+    ASSERT_EQ(device->abortBackup(baseline), Status::Ok);
+    ASSERT_EQ(device->commitBackupAt("A", 1, 1), Status::Ok);
+
+    // Keep only 3 generations. Generations 1..7 must go, and A cannot survive.
+    GcResult result;
+    ASSERT_EQ(device->collectGarbage(3, result), Status::Ok);
+    EXPECT_EQ(result.droppedThrough, 7u);
+    ASSERT_EQ(result.invalidated.size(), 1u);
+    EXPECT_EQ(result.invalidated[0], "A");
+
+    ConsumerStatus status;
+    ASSERT_EQ(device->consumerStatus("A", status), Status::Ok);
+    EXPECT_TRUE(status.fullBackupRequired)
+        << "deleting history a consumer still needs must force a full backup";
+
+    // The retained range is contiguous and starts after the drop.
+    DirtyBitmap out(device->geometry());
+    EXPECT_EQ(device->dirtySince(6, 10, out), Status::NotFound);
+    EXPECT_EQ(device->dirtySince(7, 10, out), Status::Ok);
+}
+
+TEST(Retention, CrashAfterInvalidationKeepsHistoryUntilTheNextAttempt)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+
+    for (int i = 0; i < 6; ++i) {
+        ASSERT_EQ(device->markWrite(static_cast<std::uint64_t>(i) * k64K, 1), Status::Ok);
+        ASSERT_EQ(device->seal(), Status::Ok);
+    }
+    ASSERT_EQ(device->addConsumer("A"), Status::Ok);
+    ASSERT_EQ(device->commitBackupAt("A", 1, 1), Status::Ok);
+
+    fixture.crash.arm("after_gc_invalidate");
+    bool crashed = false;
+    try {
+        GcResult result;
+        device->collectGarbage(2, result);
+    } catch (const SimulatedCrash&) {
+        crashed = true;
+    }
+    EXPECT_TRUE(crashed);
+    device.reset();
+
+    ASSERT_EQ(fixture.openDevice(device), Status::Ok);
+
+    ConsumerStatus status;
+    ASSERT_EQ(device->consumerStatus("A", status), Status::Ok);
+    EXPECT_TRUE(status.fullBackupRequired)
+        << "the invalidation was durable before any deletion";
+
+    // The checkpoint moved the retention floor before the crash, so recovery
+    // starts at generation 5 and the reclaimed files must already be gone.
+    DirtyBitmap out(device->geometry());
+    EXPECT_EQ(device->dirtySince(1, 6, out), Status::NotFound);
+    EXPECT_EQ(device->dirtySince(4, 6, out), Status::Ok);
+    EXPECT_FALSE(internal::fileExists(fixture.directory.path() + "/history/"
+                                      + deltaFileName(1)));
+
+    GcResult second;
+    ASSERT_EQ(device->collectGarbage(2, second), Status::Ok);
+    EXPECT_GT(second.droppedGenerations, 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Read-only verification
+// ---------------------------------------------------------------------------
+
+TEST(Verify, ReportsAHealthyStore)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+
+    ASSERT_EQ(device->markWrite(0, 1), Status::Ok);
+    ASSERT_EQ(device->seal(), Status::Ok);
+    ASSERT_EQ(device->addConsumer("A"), Status::Ok);
+    ASSERT_EQ(device->close(), Status::Ok);
+    device.reset();
+
+    VerifyReport report;
+    ASSERT_EQ(verifyDevice(fixture.directory.path(), fixture.identity, report), Status::Ok);
+
+    EXPECT_TRUE(report.superblockValid);
+    EXPECT_TRUE(report.identityValid);
+    EXPECT_TRUE(report.historyComplete);
+    EXPECT_TRUE(report.journalClean);
+    EXPECT_FALSE(report.uncleanShutdown);
+    EXPECT_EQ(report.generationsRetained, 1u);
+    EXPECT_EQ(report.consumers, 1u);
+    EXPECT_TRUE(report.healthy()) << report.firstError;
+}
+
+TEST(Verify, DetectsAMissingDelta)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+
+    ASSERT_EQ(device->markWrite(0, 1), Status::Ok);
+    ASSERT_EQ(device->seal(), Status::Ok);
+    ASSERT_EQ(device->checkpoint(), Status::Ok);
+    ASSERT_EQ(device->close(), Status::Ok);
+    device.reset();
+
+    ASSERT_EQ(internal::removeFile(fixture.directory.path() + "/history/"
+                                   + deltaFileName(1)),
+              Status::Ok);
+
+    VerifyReport report;
+    ASSERT_EQ(verifyDevice(fixture.directory.path(), fixture.identity, report), Status::Ok);
+    EXPECT_FALSE(report.historyComplete);
+    EXPECT_FALSE(report.healthy());
+    EXPECT_NE(report.firstError.find("generation 1"), std::string::npos);
+}
+
+TEST(Verify, ReportsUncleanShutdownWithoutFailing)
+{
+    Fixture fixture;
+    std::unique_ptr<PersistentDevice> device;
+    ASSERT_EQ(fixture.createDevice(device), Status::Ok);
+    ASSERT_EQ(device->markWrite(0, 1), Status::Ok);
+    device.reset(); // unclean
+
+    VerifyReport report;
+    ASSERT_EQ(verifyDevice(fixture.directory.path(), fixture.identity, report), Status::Ok);
+    EXPECT_TRUE(report.uncleanShutdown);
+    EXPECT_FALSE(report.healthy());
 }
 
 } // namespace
