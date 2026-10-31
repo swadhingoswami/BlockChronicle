@@ -20,16 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "blockchronicle/bitmap.h"
-
-namespace blockchronicle {
-
-// Lets EXPECT_EQ print a readable status instead of an integer.
-std::ostream& operator<<(std::ostream& os, Status status)
-{
-    return os << toString(status);
-}
-
-} // namespace blockchronicle
+#include "support/status_printer.h"
 
 namespace {
 

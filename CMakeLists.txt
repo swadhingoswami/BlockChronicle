@@ -37,6 +37,7 @@ endfunction()
 
 add_library(bc_core STATIC
     src/core/bitmap.cpp
+    src/core/generation.cpp
 )
 add_library(BlockChronicle::core ALIAS bc_core)
 target_include_directories(bc_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

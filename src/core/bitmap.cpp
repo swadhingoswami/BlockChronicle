@@ -7,65 +7,18 @@
 #include <limits>
 #include <utility>
 
+#include "word_math.h"
+
 namespace blockchronicle {
 namespace {
 
-std::size_t wordCountFor(std::uint32_t regionCount)
-{
-    return (static_cast<std::size_t>(regionCount) + (kBitsPerWord - 1u)) / kBitsPerWord;
-}
-
-// Bits at or above regionCount are always zero. The mask is only used to verify
-// and to repair the tail after a bitwise operation.
-Word tailMaskFor(std::uint32_t regionCount)
-{
-    const std::uint32_t usedBits = regionCount % kBitsPerWord;
-    if (usedBits == 0u) {
-        return std::numeric_limits<Word>::max();
-    }
-    return (Word{1} << usedBits) - Word{1};
-}
-
-// Bits [firstBit, lastBit], both inclusive and both < 64.
-Word maskInclusive(std::uint32_t firstBit, std::uint32_t lastBit)
-{
-    const Word low = (firstBit == 0u)
-        ? std::numeric_limits<Word>::max()
-        : (std::numeric_limits<Word>::max() << firstBit);
-    const Word high = (lastBit + 1u >= kBitsPerWord)
-        ? std::numeric_limits<Word>::max()
-        : ((Word{1} << (lastBit + 1u)) - Word{1});
-    return low & high;
-}
-
-// Undefined for value == 0; every caller checks first.
-std::uint32_t countTrailingZeros(Word value)
-{
-#if defined(__GNUC__) || defined(__clang__)
-    return static_cast<std::uint32_t>(__builtin_ctzll(value));
-#else
-    std::uint32_t count = 0;
-    while ((value & Word{1}) == 0u) {
-        value >>= 1u;
-        ++count;
-    }
-    return count;
-#endif
-}
-
-std::uint32_t popcountOfWord(Word value)
-{
-#if defined(__GNUC__) || defined(__clang__)
-    return static_cast<std::uint32_t>(__builtin_popcountll(value));
-#else
-    std::uint32_t count = 0;
-    while (value != 0u) {
-        value &= (value - Word{1});
-        ++count;
-    }
-    return count;
-#endif
-}
+// Single source of truth for tail masking and word arithmetic, shared with
+// ActiveBitmap. Duplicating these would risk a seal that invents or drops bits.
+using internal::countTrailingZeros;
+using internal::maskInclusive;
+using internal::popcountOfWord;
+using internal::tailMaskFor;
+using internal::wordCountFor;
 
 } // namespace
 

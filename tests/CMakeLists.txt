@@ -2,6 +2,9 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE.
 
 include(FetchContent)
+include(GoogleTest)
+
+find_package(Threads REQUIRED)
 
 find_package(GTest QUIET)
 if(NOT GTest_FOUND)
@@ -15,17 +18,22 @@ if(NOT GTest_FOUND)
     FetchContent_MakeAvailable(googletest)
 endif()
 
-add_executable(bc_unit_tests
-    unit/test_bitmap.cpp
-)
+# Test-only helpers, header only.
+add_library(bc_test_support INTERFACE)
+target_include_directories(bc_test_support INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(bc_unit_tests PRIVATE
-    bc_core
-    GTest::gtest
-    GTest::gtest_main
-)
+function(bc_add_test target source)
+    add_executable(${target} ${source})
+    target_link_libraries(${target} PRIVATE
+        bc_core
+        bc_test_support
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+    )
+    bc_set_project_warnings(${target})
+    gtest_discover_tests(${target})
+endfunction()
 
-bc_set_project_warnings(bc_unit_tests)
-
-include(GoogleTest)
-gtest_discover_tests(bc_unit_tests)
+bc_add_test(bc_unit_tests unit/test_bitmap.cpp)
+bc_add_test(bc_concurrency_tests concurrency/test_generation.cpp)
