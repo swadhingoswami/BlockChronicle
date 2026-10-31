@@ -3,6 +3,7 @@
 
 #include "blockchronicle/consumer.h"
 
+#include <mutex>
 #include <utility>
 
 namespace blockchronicle {

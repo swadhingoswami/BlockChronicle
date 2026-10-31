@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <mutex>
 #include <utility>
 
 #include "persistence/file_io.h"

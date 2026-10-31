@@ -89,10 +89,11 @@ jobs:
           CC: gcc
           CXX: g++
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBC_BUILD_BENCHMARKS=OFF
-      - name: Build
-        run: cmake --build build -j 4 2>&1 | tee build.log
-      - name: Fail on warnings
+      - name: Build (fails on compiler warnings)
+        shell: bash
         run: |
+          set -o pipefail
+          cmake --build build -j 4 2>&1 | tee build.log
           if grep -E "warning:" build.log; then
             echo "warnings found" >&2
             exit 1

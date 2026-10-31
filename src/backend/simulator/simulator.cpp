@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <mutex>
 #include <utility>
 
 #include "persistence/file_io.h"

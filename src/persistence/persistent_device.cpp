@@ -3,6 +3,7 @@
 
 #include "blockchronicle/persistent_device.h"
 
+#include <mutex>
 #include <utility>
 
 #include "blockchronicle/codec.h"

@@ -3,6 +3,7 @@
 
 #include "blockchronicle/history.h"
 
+#include <mutex>
 #include <utility>
 
 namespace blockchronicle {
