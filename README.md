@@ -1,3 +1,5 @@
+<img width="1024" height="1024" alt="image" src="https://github.com/user-attachments/assets/440c4dea-0efd-44f3-bb68-e3c296d7e244" />
+
 <div align="center">
 
 # BlockChronicle
