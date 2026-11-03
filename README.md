@@ -29,7 +29,7 @@ shared bitmap when one of them finishes would silently break the others.
 BlockChronicle keeps a numbered history of changes and an independent cursor per backup,
 so one consumer's success cannot damage another's chain.
 
-## The problem, drawn
+## The problem, drawn 
 
 ```mermaid
 flowchart LR
